@@ -1,25 +1,100 @@
 
 <!DOCTYPE html>
-<html lang="en">
+<html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Odoo External Self-Order</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>GIO+FARMA | Boutique de Salud Digital</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script type="importmap">
-  {
-    "imports": {
-      "@google/genai": "https://esm.sh/@google/genai@^1.38.0",
-      "lucide-react": "https://esm.sh/lucide-react@^0.563.0",
-      "react/": "https://esm.sh/react@^19.2.3/",
-      "react": "https://esm.sh/react@^19.2.3",
-      "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-      "react-dom": "https://esm.sh/react-dom@^19.2.3"
-    }
+{
+  "imports": {
+    "@google/genai": "https://esm.sh/@google/genai@^1.38.0",
+    "lucide-react": "https://esm.sh/lucide-react@^0.563.0",
+    "react": "https://esm.sh/react@19.0.0",
+    "react-dom": "https://esm.sh/react-dom@19.0.0",
+    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/"
   }
-  </script>
+}
+</script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+    
+    :root {
+      --primary: #e6007e;
+      --secondary: #8cc63f;
+      --bg: #ffffff;
+    }
+
+    body { 
+      font-family: 'Plus Jakarta Sans', sans-serif; 
+      margin: 0; 
+      padding: 0;
+      background-color: var(--bg);
+      color: #1a1f2e;
+      -webkit-tap-highlight-color: transparent;
+      overflow-x: hidden;
+    }
+
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    
+    /* Premium Glassmorphism */
+    .glass-nav {
+      background: rgba(255, 255, 255, 0.7);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.03);
+    }
+
+    /* Floating Animated Blobs */
+    .blob {
+      position: absolute;
+      width: 500px;
+      height: 500px;
+      filter: blur(80px);
+      z-index: -1;
+      opacity: 0.15;
+      animation: move 20s infinite alternate;
+    }
+    .blob-1 { background: var(--primary); top: -200px; left: -100px; }
+    .blob-2 { background: var(--secondary); bottom: -100px; right: -100px; animation-delay: -5s; }
+
+    @keyframes move {
+      from { transform: translate(0, 0) scale(1); }
+      to { transform: translate(100px, 50px) scale(1.1); }
+    }
+
+    /* Keyframe Animations */
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(30px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes scaleIn {
+      from { opacity: 0; transform: scale(0.9); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    .animate-fade-up { animation: fadeInUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+    .animate-scale-in { animation: scaleIn 1s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+    
+    .stagger-1 { animation-delay: 0.1s; }
+    .stagger-2 { animation-delay: 0.2s; }
+    .stagger-3 { animation-delay: 0.3s; }
+
+    .premium-shadow {
+      box-shadow: 0 20px 50px rgba(0,0,0,0.05);
+    }
+    
+    .btn-glow:hover {
+      box-shadow: 0 0 30px rgba(230, 0, 126, 0.3);
+    }
+  </style>
 </head>
-<body class="bg-gray-50">
+<body>
   <div id="root"></div>
   <script type="module" src="index.tsx"></script>
 </body>

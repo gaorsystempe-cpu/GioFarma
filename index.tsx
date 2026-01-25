@@ -1,41 +1,35 @@
 
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { 
   Search, 
   ShoppingCart, 
   ChevronRight, 
-  ChevronLeft,
   Plus, 
-  Minus, 
+  Minus,
   X, 
   Sparkles, 
-  BriefcaseMedical, 
   CheckCircle2,
-  Clock,
   ArrowRight,
-  Info,
   Truck,
   Store,
-  MapPin,
-  ShieldCheck,
-  Pill,
-  HeartPulse,
-  ArrowUpRight,
-  Menu,
-  Phone,
-  Activity,
   Award,
-  Zap,
   Stethoscope,
-  Settings,
-  Database,
-  Lock,
-  Globe,
-  User,
-  Smartphone,
-  AlertCircle,
-  ShieldAlert
+  LayoutDashboard,
+  Trash2,
+  Info,
+  ArrowUpRight,
+  Zap,
+  Tag,
+  Clock,
+  Heart,
+  ShieldCheck,
+  Home,
+  Menu as MenuIcon,
+  Stethoscope as DoctorIcon,
+  KeyRound,
+  Activity,
+  User
 } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 
@@ -48,74 +42,41 @@ interface Product {
   description: string;
   category: string;
   image: string;
+  stock: number;
+  promo?: boolean;
+  scientific_name?: string;
 }
 
 interface CartItem extends Product {
   quantity: number;
 }
 
-interface OdooConfig {
-  url: string;
-  db: string;
-  username: string;
-  apiKey: string;
-  yapeNumber: string;
-  plinNumber: string;
-}
-
-const DEFAULT_CONFIG: OdooConfig = {
-  url: 'https://tu-instancia.odoo.com',
-  db: 'odoo_db',
-  username: 'admin@farma.com',
-  apiKey: '',
-  yapeNumber: '987 654 321',
-  plinNumber: '987 654 321'
-};
-
-const CATEGORIES = ["Todos", "Medicamentos", "Cuidado de Piel", "Bebés", "Higiene", "Primeros Auxilios"];
-
-const MOCK_PRODUCTS: Product[] = [
-  { id: 1, name: "Paracetamol 500mg (10 tab)", price: 5.50, category: "Medicamentos", description: "Alivio efectivo para el dolor y la fiebre. Calidad farmacéutica certificada.", image: "https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&q=80&w=400" },
-  { id: 2, name: "Bloqueador Solar FPS 50+", price: 45.00, category: "Cuidado de Piel", description: "Protección dermatológica alta contra rayos UVA/UVB para uso diario.", image: "https://images.unsplash.com/photo-1556229174-5e42a09e45af?auto=format&fit=crop&q=80&w=400" },
-  { id: 3, name: "Pañales Premium Talla G", price: 62.90, category: "Bebés", description: "Máxima absorción y suavidad superior para pieles delicadas.", image: "https://images.unsplash.com/photo-1544126592-807daa2b5650?auto=format&fit=crop&q=80&w=400" },
-  { id: 4, name: "Alcohol en Gel 500ml", price: 12.50, category: "Primeros Auxilios", description: "Higiene instantánea con fórmula humectante y 70% de alcohol.", image: "https://images.unsplash.com/photo-1584622650111-993a426fbf0a?auto=format&fit=crop&q=80&w=400" },
-  { id: 5, name: "Vitamina C Efervescente", price: 18.00, category: "Medicamentos", description: "Potente antioxidante para el sistema inmunológico.", image: "https://images.unsplash.com/photo-1616671285412-87008744111f?auto=format&fit=crop&q=80&w=400" },
-  { id: 6, name: "Jabón Líquido Neutro", price: 15.20, category: "Higiene", description: "Limpieza profunda y suave para pieles sensibles.", image: "https://images.unsplash.com/photo-1600857544200-b2f666a9a2ec?auto=format&fit=crop&q=80&w=400" },
+const INITIAL_PRODUCTS: Product[] = [
+  { id: 1, name: "Panadol Forte 500mg", scientific_name: "Paracetamol", price: 1.20, description: "Alivio efectivo para dolores moderados y fiebre.", category: "Medicamentos", image: "https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?w=400", stock: 150, promo: true },
+  { id: 2, name: "CeraVe Crema Facial", scientific_name: "Ceramidas", price: 89.00, description: "Hidratación profunda para pieles sensibles.", category: "Cuidado de Piel", image: "https://images.unsplash.com/photo-1556229174-5e42a09e45af?w=400", stock: 45, promo: true },
+  { id: 3, name: "Suero Fisiológico 100ml", scientific_name: "Cloruro de Sodio", price: 4.50, description: "Ideal para limpieza nasal y heridas.", category: "Primeros Auxilios", image: "https://images.unsplash.com/photo-1584622650111-993a426fbf0a?w=400", stock: 200 },
+  { id: 4, name: "Huggies Premium Care G", price: 55.90, description: "Pañales con canales de aire para piel seca.", category: "Bebés", image: "https://images.unsplash.com/photo-1544126592-807daa2b5650?w=400", stock: 30, promo: true },
+  { id: 5, name: "Jabón Neutro Glicerina", price: 12.00, description: "Hipoalergénico para toda la familia.", category: "Higiene", image: "https://images.unsplash.com/photo-1559056199-641a0ac8b55e?w=400", stock: 80 },
+  { id: 6, name: "Vitamina C 1000mg", scientific_name: "Ácido Ascórbico", price: 45.00, description: "Refuerza tu sistema inmunológico.", category: "Medicamentos", image: "https://images.unsplash.com/photo-1616671285435-08e178047990?w=400", stock: 120, promo: true }
 ];
 
-const BANNERS = [
-  { 
-    title: "Innovación Médica", 
-    subtitle: "Catálogo farmacéutico de alta gama con asesoría profesional 24/7.",
-    image: "https://images.unsplash.com/photo-1587854692152-cbe660dbbb88?auto=format&fit=crop&q=80&w=1200",
-  },
-  { 
-    title: "Dermocosmética", 
-    subtitle: "Selección exclusiva de productos para el cuidado avanzado de tu piel.",
-    image: "https://images.unsplash.com/photo-1556228578-0d85b1a4d571?auto=format&fit=crop&q=80&w=1200",
-  },
-  {
-    title: "Línea Vitamínica GIO+",
-    subtitle: "Potencia tu energía y fortalece tus defensas con nuestra nueva gama premium. ¡20% OFF!",
-    image: "https://images.unsplash.com/photo-1584017947486-62eef2b4c0f8?auto=format&fit=crop&q=80&w=1200",
-  }
-];
+const WEB_CATEGORIES = ["Todos", "Medicamentos", "Cuidado de Piel", "Bebés", "Higiene", "Primeros Auxilios"];
 
-// --- Componentes UI ---
+// --- UI Components ---
 
 const Logo = ({ inverted = false, size = "md", onClick }: { inverted?: boolean, size?: "sm" | "md" | "lg", onClick?: () => void }) => {
   const sizes = {
-    sm: { circle: "w-8 h-8", plus: "text-lg", text: "text-xl", sub: "text-[5px]", icon: 16 },
-    md: { circle: "w-11 h-11", plus: "text-2xl", text: "text-3xl", sub: "text-[7px]", icon: 22 },
-    lg: { circle: "w-16 h-16", plus: "text-4xl", text: "text-5xl", sub: "text-[10px]", icon: 32 }
+    sm: { circle: "w-8 h-8", text: "text-lg", sub: "text-[5px]", icon: 16 },
+    md: { circle: "w-10 h-10", text: "text-2xl", sub: "text-[6px]", icon: 20 },
+    lg: { circle: "w-16 h-16", text: "text-5xl", sub: "text-[10px]", icon: 32 }
   };
   const current = sizes[size];
   const textColor = inverted ? "text-white" : "text-[#e6007e]";
   const circleColor = inverted ? "border-white" : "border-[#e6007e]";
 
   return (
-    <div onClick={onClick} className={`flex items-center gap-3 ${textColor} select-none cursor-pointer group`}>
-      <div className={`${current.circle} border-2 ${circleColor} rounded-full flex items-center justify-center shrink-0 transition-transform group-active:scale-95`}>
+    <div onClick={(e) => { e.stopPropagation(); if(onClick) onClick(); }} className={`flex items-center gap-3 ${textColor} select-none cursor-pointer group`}>
+      <div className={`${current.circle} border-2 ${circleColor} rounded-2xl flex items-center justify-center shrink-0 transition-all duration-500 group-hover:rotate-[15deg] group-hover:bg-[#e6007e] group-hover:text-white group-hover:shadow-2xl`}>
          <Stethoscope size={current.icon} strokeWidth={2.5} />
       </div>
       <div className="flex flex-col leading-none">
@@ -124,117 +85,68 @@ const Logo = ({ inverted = false, size = "md", onClick }: { inverted?: boolean, 
           <span className="text-[#8cc63f] mx-1">+</span>
           <span>FARMA</span>
         </div>
-        <p className={`font-bold ${current.sub} uppercase tracking-[0.15em] opacity-80 mt-1`}>
-          DONDE TU BIENESTAR ES NUESTRA PRIORIDAD
-        </p>
+        <p className={`font-bold ${current.sub} uppercase tracking-[0.2em] opacity-50 mt-1`}>La farmacia del futuro</p>
       </div>
     </div>
   );
 };
 
 const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, loading = false }: any) => {
-  const baseStyles = "px-6 py-4 rounded-2xl font-bold transition-all flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50 select-none cursor-pointer text-sm tracking-tight";
   const variants: any = {
-    primary: "bg-[#e6007e] text-white hover:bg-[#c90078] shadow-lg shadow-pink-100",
-    outline: "bg-white text-slate-600 border border-slate-200 hover:border-[#e6007e] hover:text-[#e6007e]",
-    ghost: "bg-transparent text-slate-500 hover:bg-slate-50",
-    dark: "bg-slate-900 text-white hover:bg-slate-800 shadow-xl"
+    primary: "bg-[#e6007e] text-white hover:bg-[#c90078] shadow-lg shadow-pink-100 btn-glow",
+    outline: "bg-white text-slate-900 border border-slate-200 hover:border-[#e6007e] hover:text-[#e6007e]",
+    dark: "bg-slate-950 text-white hover:bg-slate-900 shadow-2xl",
+    success: "bg-[#8cc63f] text-white shadow-lg"
   };
   return (
-    <button disabled={disabled || loading} onClick={onClick} className={`${baseStyles} ${variants[variant]} ${className}`}>
+    <button disabled={disabled || loading} onClick={onClick} className={`px-10 py-5 rounded-[2rem] font-bold transition-all flex items-center justify-center gap-3 active:scale-95 text-sm tracking-wide ${variants[variant]} ${className}`}>
       {loading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : children}
     </button>
   );
 };
 
-const ProductCard: React.FC<{ product: Product, onAdd: (p: Product) => void }> = ({ product, onAdd }) => (
-  <div className="bg-white rounded-[2.5rem] overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.02)] hover:shadow-[0_15px_40px_rgba(0,0,0,0.06)] transition-all duration-500 border border-slate-50 flex flex-col h-full group">
-    <div className="relative aspect-square overflow-hidden bg-slate-50/50 p-6">
-      <img src={product.image} alt={product.name} className="w-full h-full object-contain mix-blend-multiply group-hover:scale-110 transition-transform duration-1000" />
-      <div className="absolute top-6 right-6 bg-white px-3 py-1.5 rounded-2xl font-black text-slate-900 text-[10px] shadow-sm border border-slate-100">
-        S/ {product.price.toFixed(2)}
-      </div>
-    </div>
-    <div className="p-7 flex flex-col flex-grow">
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-[9px] font-black text-[#e6007e] uppercase tracking-widest">{product.category}</span>
-        <div className="h-1 w-1 bg-slate-200 rounded-full"></div>
-        <span className="text-[9px] font-bold text-slate-300 uppercase tracking-widest">Premium Care</span>
-      </div>
-      <h3 className="text-base font-bold text-slate-900 mb-2 leading-tight group-hover:text-[#e6007e] transition-colors">{product.name}</h3>
-      <p className="text-xs text-slate-400 mb-6 line-clamp-2 flex-grow leading-relaxed font-medium">{product.description}</p>
-      <Button onClick={() => onAdd(product)} variant="outline" className="w-full !rounded-xl group-hover:bg-slate-900 group-hover:text-white group-hover:border-slate-900">
-        <Plus size={16} /> Añadir
-      </Button>
-    </div>
-  </div>
-);
-
 const App = () => {
-  const [view, setView] = useState<'welcome' | 'menu' | 'checkout' | 'success'>('welcome');
-  const [isAdminMode, setIsAdminMode] = useState(false);
-  const [logoClickCount, setLogoClickCount] = useState(0);
-  const [config, setConfig] = useState<OdooConfig>(() => {
-    const saved = localStorage.getItem('giofarma_config');
-    return saved ? JSON.parse(saved) : DEFAULT_CONFIG;
-  });
+  const [view, setView] = useState<'welcome' | 'menu' | 'checkout' | 'success' | 'admin_dashboard'>('welcome');
+  const [isAdminMode, setIsAdminMode] = useState(() => localStorage.getItem('giofarma_admin_active') === 'true');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [activeCategory, setActiveCategory] = useState("Todos");
   const [searchQuery, setSearchQuery] = useState("");
+  const [isCartOpen, setIsCartOpen] = useState(false);
   const [isAiOpen, setIsAiOpen] = useState(false);
   const [aiMessage, setAiMessage] = useState("");
   const [aiResponse, setAiResponse] = useState("");
   const [isAiLoading, setIsAiLoading] = useState(false);
-  const [deliveryMethod, setDeliveryMethod] = useState<'pickup' | 'delivery'>('pickup');
-  const [address, setAddress] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState<'yape' | 'plin' | 'whatsapp'>('yape');
-  const [currentSlide, setCurrentSlide] = useState(0);
-  const [isCartOpen, setIsCartOpen] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isSyncingOdoo, setIsSyncingOdoo] = useState(false);
+  const [showPassModal, setShowPassModal] = useState(false);
+  const [passInput, setPassInput] = useState("");
+  
+  const [products] = useState<Product[]>(INITIAL_PRODUCTS);
 
-  // Detección inicial de modo admin por URL
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('mode') === 'admin') {
+  // Gestos Admin
+  const [logoClickCount, setLogoClickCount] = useState(0);
+  const handleLogoClick = () => {
+    if (isAdminMode) { setView('admin_dashboard'); return; }
+    const next = logoClickCount + 1;
+    setLogoClickCount(next);
+    if (next >= 3) { setShowPassModal(true); setLogoClickCount(0); }
+    setTimeout(() => setLogoClickCount(0), 3000);
+  };
+
+  const handleVerifyPass = () => {
+    if (passInput === "admin123") {
       setIsAdminMode(true);
+      setShowPassModal(false);
+      setPassInput("");
+      setView('admin_dashboard');
     }
-  }, []);
-
-  // Gesto secreto: 5 clics en el logo activa modo admin
-  const handleLogoClick = useCallback(() => {
-    setLogoClickCount(prev => {
-      const next = prev + 1;
-      if (next >= 5) {
-        setIsAdminMode(true);
-        return 0;
-      }
-      return next;
-    });
-    // Resetear contador tras 2 segundos de inactividad
-    setTimeout(() => setLogoClickCount(0), 2000);
-  }, []);
-
-  useEffect(() => {
-    if (view === 'welcome') {
-      const interval = setInterval(() => {
-        setCurrentSlide(prev => (prev + 1) % BANNERS.length);
-      }, 7000);
-      return () => clearInterval(interval);
-    }
-  }, [view]);
-
-  useEffect(() => {
-    localStorage.setItem('giofarma_config', JSON.stringify(config));
-  }, [config]);
+  };
 
   const filteredProducts = useMemo(() => {
-    return MOCK_PRODUCTS.filter(p => {
+    return products.filter(p => {
       const matchesCategory = activeCategory === "Todos" || p.category === activeCategory;
       const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase());
       return matchesCategory && matchesSearch;
     });
-  }, [activeCategory, searchQuery]);
+  }, [activeCategory, searchQuery, products]);
 
   const addToCart = (product: Product) => {
     setCart(prev => {
@@ -242,14 +154,7 @@ const App = () => {
       if (existing) return prev.map(item => item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item);
       return [...prev, { ...product, quantity: 1 }];
     });
-  };
-
-  const removeFromCart = (id: number) => {
-    setCart(prev => {
-      const existing = prev.find(item => item.id === id);
-      if (existing && existing.quantity > 1) return prev.map(item => item.id === id ? { ...item, quantity: item.quantity - 1 } : item);
-      return prev.filter(item => item.id !== id);
-    });
+    setIsCartOpen(true);
   };
 
   const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
@@ -260,103 +165,108 @@ const App = () => {
     setAiResponse("");
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const prompt = `Eres el asistente profesional de GIO+FARMA. Responde con elegancia y conocimiento médico breve. Usuario: "${aiMessage}"`;
+      const prompt = `Como asesor farmacéutico de GIO+FARMA, responde profesionalmente a: "${aiMessage}". Sé empático y claro.`;
       const response = await ai.models.generateContent({ model: 'gemini-3-flash-preview', contents: prompt });
-      setAiResponse(response.text || "Su bienestar es nuestra prioridad.");
+      setAiResponse(response.text || "Lo siento, ¿puedes repetir?");
     } catch (err) {
-      setAiResponse("Lo sentimos, intente de nuevo más tarde.");
+      setAiResponse("Disculpa, el asesor no está disponible ahora.");
     } finally {
       setIsAiLoading(false);
     }
   };
 
-  const handleFinalizeOrder = async () => {
-    setIsSyncingOdoo(true);
-    try {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      setIsSyncingOdoo(false);
-      setCart([]);
-      setView('success');
-    } catch (e) {
-      setIsSyncingOdoo(false);
-      alert("Error al conectar con Odoo. Verifique su configuración.");
-    }
-  };
-
-  // El botón de configuración ahora solo se renderiza si isAdminMode es verdadero
-  const AdminSettingsButton = () => {
-    if (!isAdminMode) return null;
-    return (
-      <button 
-        onClick={() => setIsSettingsOpen(true)} 
-        className="group flex items-center gap-3 px-5 py-3 bg-slate-900 text-white rounded-2xl hover:bg-[#e6007e] transition-all shadow-xl border border-white/10"
-      >
-        <ShieldAlert size={18} className="text-[#8cc63f]" />
-        <span className="text-[11px] font-black uppercase tracking-widest">Panel Farmacia</span>
-      </button>
-    );
-  };
+  // --- Views ---
 
   if (view === 'welcome') {
     return (
-      <div className="min-h-screen bg-white flex flex-col items-center overflow-x-hidden">
-        <header className="w-full max-w-7xl px-8 py-8 flex justify-between items-center z-20">
-          <Logo size="md" onClick={handleLogoClick} />
-          <div className="flex items-center gap-6">
-            <div className="hidden lg:flex gap-10 text-[9px] font-bold text-slate-300 uppercase tracking-[0.3em]">
-              <span className="hover:text-slate-900 cursor-pointer transition-all">Servicios</span>
-              <span className="hover:text-slate-900 cursor-pointer transition-all">Sedes</span>
+      <div className="min-h-screen relative flex flex-col bg-white overflow-hidden">
+        {/* Animated Background Elements */}
+        <div className="blob blob-1"></div>
+        <div className="blob blob-2"></div>
+        
+        {/* Cabecera Móvil Corregida y Premium */}
+        <header className="fixed top-0 left-0 right-0 z-[100] px-6 py-6 lg:px-12 glass-nav">
+          <div className="max-w-7xl mx-auto flex justify-between items-center">
+            <Logo size="md" onClick={handleLogoClick} />
+            <div className="flex items-center gap-4">
+              <button className="hidden sm:flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-400">
+                <ShieldCheck size={16} className="text-[#8cc63f]" /> Calidad Asegurada
+              </button>
+              {isAdminMode && (
+                <button onClick={() => setView('admin_dashboard')} className="p-3 bg-slate-900 text-white rounded-2xl shadow-xl animate-scale-in">
+                  <LayoutDashboard size={20} />
+                </button>
+              )}
             </div>
-            <AdminSettingsButton />
           </div>
         </header>
 
-        <main className="flex-1 w-full max-w-7xl px-6 md:px-12 grid grid-cols-1 lg:grid-cols-12 gap-12 items-center py-6">
-          <div className="lg:col-span-7 lg:order-2 relative">
-             <div className="relative aspect-[16/10] lg:aspect-[4/3] rounded-[3rem] lg:rounded-[4rem] overflow-hidden shadow-[0_40px_80px_rgba(0,0,0,0.06)] bg-slate-50">
-                {BANNERS.map((slide, idx) => (
-                  <div key={idx} className={`absolute inset-0 transition-all duration-1000 transform ${idx === currentSlide ? 'opacity-100 scale-100' : 'opacity-0 scale-105 pointer-events-none'}`}>
-                     <img src={slide.image} className="w-full h-full object-cover" alt={slide.title} />
-                     <div className="absolute inset-0 bg-gradient-to-t from-slate-900/40 via-transparent to-transparent"></div>
-                     <div className="absolute bottom-8 left-8 right-8 lg:bottom-12 lg:left-12 lg:right-12 space-y-3">
-                        <h2 className="text-2xl md:text-5xl font-black text-white tracking-tight leading-tight">{slide.title}</h2>
-                        <p className="text-white/80 font-medium text-xs md:text-base max-w-md line-clamp-2">{slide.subtitle}</p>
-                     </div>
-                  </div>
-                ))}
-                <div className="absolute bottom-6 right-8 lg:bottom-8 lg:right-12 flex gap-2 lg:gap-3">
-                  {BANNERS.map((_, idx) => (
-                    <button key={idx} onClick={() => setCurrentSlide(idx)} className={`h-1 lg:h-1.5 transition-all duration-500 rounded-full ${idx === currentSlide ? 'w-8 lg:w-12 bg-white' : 'w-2 bg-white/30'}`} />
-                  ))}
-                </div>
-             </div>
-          </div>
-
-          <div className="lg:col-span-5 lg:order-1 space-y-8 lg:space-y-12">
-             <div className="space-y-4 lg:space-y-6">
-                <div className="w-fit px-4 py-1.5 bg-slate-50 border border-slate-100 rounded-full text-[9px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                   <Award size={14} className="text-[#e6007e]" /> Excelencia Profesional
-                </div>
-                <h1 className="text-4xl md:text-7xl font-black text-slate-900 leading-[1] tracking-tighter">
-                  Tu Bienestar es <br /> <span className="text-[#e6007e]">Prioridad.</span>
-                </h1>
-                <p className="text-slate-500 text-base md:text-lg font-medium leading-relaxed max-w-md">
-                  GIO+FARMA conecta tu salud con el sistema ERP de Odoo para una gestión farmacéutica eficiente.
-                </p>
-             </div>
-
-             <div className="flex flex-col sm:flex-row gap-4 lg:gap-5">
-                <Button onClick={() => { setDeliveryMethod('pickup'); setView('menu'); }} className="flex-1 shadow-2xl">
-                   Empezar Pedido <ArrowRight size={20} />
+        {/* Hero Section */}
+        <main className="flex-1 flex flex-col items-center justify-center pt-32 pb-12 px-6">
+          <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-16 items-center w-full">
+            
+            {/* Texto y Llamada a la acción */}
+            <div className="text-center lg:text-left space-y-8 order-2 lg:order-1">
+              <div className="inline-flex items-center gap-3 px-6 py-2 bg-slate-100 rounded-full animate-fade-up stagger-1">
+                <Activity size={16} className="text-[#e6007e]" />
+                <span className="text-[10px] font-black uppercase tracking-[0.2em]">Salud Certificada GIO+</span>
+              </div>
+              
+              <h1 className="text-5xl md:text-7xl lg:text-8xl font-black text-slate-900 tracking-tighter leading-[0.9] animate-fade-up stagger-2">
+                Elevamos tu <br />
+                <span className="text-[#e6007e]">bienestar.</span>
+              </h1>
+              
+              <p className="text-lg lg:text-xl text-slate-500 font-medium max-w-lg mx-auto lg:mx-0 animate-fade-up stagger-3">
+                Una experiencia de farmacia redefinida. Productos de alta gama, entrega inteligente y asesoría inmediata en la palma de tu mano.
+              </p>
+              
+              <div className="flex flex-col sm:flex-row gap-4 pt-4 animate-fade-up stagger-3">
+                <Button onClick={() => setView('menu')} className="w-full sm:w-fit text-lg py-7">
+                  Comenzar Experiencia <ArrowRight size={22} />
                 </Button>
-                <div className="flex-1 text-center bg-slate-50/50 p-4 rounded-3xl border border-slate-100">
-                   <p className="text-[10px] font-bold text-slate-300 uppercase tracking-widest mb-2">Pague con:</p>
-                   <div className="flex justify-center gap-3">
-                      <div className="w-10 h-10 bg-[#8C2C94] rounded-xl flex items-center justify-center text-white font-black text-xs">Y</div>
-                      <div className="w-10 h-10 bg-[#00BCD4] rounded-xl flex items-center justify-center text-white font-black text-xs">P</div>
+                <div className="flex items-center justify-center gap-4 px-8 py-4 border border-slate-100 rounded-3xl bg-white/50 backdrop-blur-sm shadow-sm">
+                  <div className="flex -space-x-3">
+                    {[1,2,3].map(i => <div key={i} className="w-10 h-10 rounded-full border-4 border-white bg-slate-200 overflow-hidden"><img src={`https://i.pravatar.cc/100?u=${i}`} /></div>)}
+                  </div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 text-left leading-tight">
+                    +10k Usuarios <br /> Confían en GIO+
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Visual Assets Section */}
+            <div className="relative order-1 lg:order-2 flex justify-center animate-scale-in">
+              <div className="relative w-full max-w-[500px]">
+                <div className="aspect-[4/5] rounded-[4rem] overflow-hidden premium-shadow transform -rotate-2 hover:rotate-0 transition-all duration-700">
+                  <img src="https://images.unsplash.com/photo-1576602976047-174e57a47881?auto=format&fit=crop&q=80&w=1200" className="w-full h-full object-cover scale-110 hover:scale-100 transition-all duration-1000" />
+                </div>
+                
+                {/* Floating Cards */}
+                <div className="absolute -bottom-10 -right-4 lg:-right-12 bg-white p-8 rounded-[3rem] shadow-2xl border border-slate-50 animate-bounce transition-all duration-1000">
+                   <div className="flex items-center gap-5">
+                      <div className="w-16 h-16 bg-[#e6007e] rounded-[1.5rem] flex items-center justify-center text-white shadow-xl shadow-pink-100">
+                        <Truck size={32} />
+                      </div>
+                      <div className="text-left">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Entrega Express</p>
+                        <p className="text-xl font-black text-slate-900 leading-tight">30 Minutos</p>
+                      </div>
                    </div>
                 </div>
-             </div>
+
+                <div className="absolute top-1/4 -left-12 hidden lg:flex bg-white/90 backdrop-blur-xl p-6 rounded-[2.5rem] shadow-2xl border border-white gap-4 animate-pulse">
+                   <div className="w-12 h-12 bg-[#8cc63f] rounded-2xl flex items-center justify-center text-white">
+                      <Zap size={24} />
+                   </div>
+                   <div className="text-left">
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Asesoría IA</p>
+                      <p className="text-sm font-bold text-slate-900">Activa 24/7</p>
+                   </div>
+                </div>
+              </div>
+            </div>
           </div>
         </main>
       </div>
@@ -364,318 +274,285 @@ const App = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[#fcfcfc] flex flex-col font-sans">
-      <header className="sticky top-0 z-50 bg-white/70 backdrop-blur-3xl border-b border-slate-50 px-6 md:px-12 py-5 flex items-center justify-between">
-        <div className="cursor-pointer" onClick={() => setView('welcome')}>
-          <Logo size="sm" onClick={handleLogoClick} />
-        </div>
-        
-        <div className="flex-1 max-w-2xl mx-16 relative hidden lg:block text-center">
-           <AdminSettingsButton />
-        </div>
+    <div className="min-h-screen flex flex-col bg-[#fcfcfc] pb-24 lg:pb-0 animate-fade-up">
+      {/* Header Catalogo - Corregido y Unificado */}
+      <header className="sticky top-0 z-[100] glass-nav px-6 lg:px-12 py-5 flex items-center justify-between">
+         <Logo size="sm" onClick={handleLogoClick} />
+         
+         <div className="hidden md:flex flex-1 max-w-xl mx-16 relative group">
+            <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-[#e6007e] transition-colors" size={18} />
+            <input 
+              type="text" 
+              placeholder="Encuentra salud y bienestar..." 
+              className="w-full pl-16 pr-8 py-4 bg-slate-100/50 rounded-2xl text-sm font-bold focus:bg-white focus:ring-2 focus:ring-[#e6007e]/10 transition-all outline-none" 
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+            />
+         </div>
 
-        <div className="flex items-center gap-4 lg:gap-6">
-          <button onClick={() => setIsAiOpen(true)} className="flex items-center gap-3 px-4 lg:px-5 py-2.5 bg-slate-900 text-white rounded-[1.2rem] text-[11px] font-bold hover:bg-slate-800 transition-all shadow-xl shadow-slate-100">
-            <Sparkles size={16} className="text-[#8cc63f]" />
-            <span className="hidden sm:inline">Expert AI</span>
-          </button>
-          <button onClick={() => setIsCartOpen(true)} className="relative p-2.5 text-slate-900 hover:bg-slate-50 rounded-2xl transition-all">
-            <ShoppingCart size={22} />
-            {cart.length > 0 && (
-              <span className="absolute top-1 right-1 bg-[#e6007e] text-white text-[9px] font-black w-5 h-5 flex items-center justify-center rounded-full border-2 border-white">
-                {cart.length}
-              </span>
-            )}
-          </button>
-        </div>
+         <div className="flex items-center gap-6">
+            <button onClick={() => setIsAiOpen(true)} className="hidden sm:flex items-center gap-3 px-6 py-3 bg-slate-950 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-2xl hover:bg-[#e6007e] transition-all">
+               <Sparkles size={16} className="text-[#8cc63f]"/> Especialista IA
+            </button>
+            <button onClick={() => setIsCartOpen(true)} className="relative p-3.5 text-slate-900 bg-white rounded-2xl shadow-sm border border-slate-100 hover:shadow-xl transition-all">
+               <ShoppingCart size={24} />
+               {cart.length > 0 && (
+                 <span className="absolute -top-1 -right-1 bg-[#e6007e] text-white text-[9px] font-black w-6 h-6 flex items-center justify-center rounded-full border-4 border-white shadow-lg animate-bounce">
+                   {cart.length}
+                 </span>
+               )}
+            </button>
+         </div>
       </header>
 
-      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-        <aside className="w-full md:w-80 bg-white md:border-r border-slate-50 flex flex-col overflow-y-auto">
-          <div className="p-10 space-y-10">
-            <div className="space-y-4">
-              <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest px-2">Especialidades</p>
-              <div className="flex md:flex-col gap-1.5 overflow-x-auto no-scrollbar">
-                {CATEGORIES.map(cat => (
-                  <button key={cat} onClick={() => setActiveCategory(cat)} className={`whitespace-nowrap flex items-center justify-between px-6 py-4 rounded-[1.5rem] transition-all flex-shrink-0 md:flex-shrink text-left ${activeCategory === cat ? 'bg-slate-900 text-white font-bold shadow-2xl' : 'text-slate-400 hover:bg-slate-50'}`}>
-                    <span className="text-[13px] tracking-tight">{cat}</span>
-                    {activeCategory === cat && <ChevronRight size={14} className="hidden md:block" />}
-                  </button>
-                ))}
-              </div>
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+         {/* Sidebar Navigation */}
+         <aside className="lg:w-80 lg:border-r border-slate-100 bg-white shrink-0 overflow-x-auto lg:overflow-y-auto no-scrollbar scroll-smooth">
+            <div className="flex lg:flex-col p-4 lg:p-10 gap-3 lg:gap-2">
+               <p className="hidden lg:block text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] px-5 mb-5">Nuestras Secciones</p>
+               {WEB_CATEGORIES.map(c => (
+                 <button 
+                   key={c} 
+                   onClick={() => setActiveCategory(c)} 
+                   className={`whitespace-nowrap px-8 lg:px-6 py-4 lg:py-5 rounded-2xl font-black text-sm transition-all flex items-center justify-between group shrink-0 ${activeCategory === c ? 'bg-[#e6007e] text-white shadow-xl shadow-pink-100' : 'text-slate-400 bg-slate-50 lg:bg-transparent hover:bg-slate-50'}`}
+                 >
+                   <span>{c}</span>
+                   <ChevronRight size={14} className={`hidden lg:block ${activeCategory === c ? 'opacity-100 translate-x-1' : 'opacity-0'} transition-all`} />
+                 </button>
+               ))}
             </div>
             
-            {/* Solo se muestra aviso si estamos en modo admin y falta configurar */}
-            {isAdminMode && !config.apiKey && (
-              <div className="bg-amber-50 p-6 rounded-[2rem] border border-amber-100 flex gap-3 animate-pulse">
-                 <AlertCircle size={20} className="text-amber-500 shrink-0" />
-                 <p className="text-[10px] font-bold text-amber-700 leading-relaxed uppercase">
-                    Configuración pendiente en Odoo.
-                 </p>
-              </div>
-            )}
-          </div>
-        </aside>
-
-        <main className="flex-1 p-8 md:p-16 overflow-y-auto">
-          <div className="max-w-6xl mx-auto space-y-12">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-8">
-              <div className="space-y-2">
-                <h1 className="text-4xl md:text-6xl font-black text-slate-900 tracking-tighter">{activeCategory}</h1>
-                <p className="text-slate-300 font-medium text-base italic">Atención farmacéutica de alta gama.</p>
-              </div>
-              <div className="flex bg-white p-1.5 rounded-[1.5rem] border border-slate-100 shadow-sm">
-                 <button onClick={() => setDeliveryMethod('pickup')} className={`px-8 py-3.5 rounded-2xl text-[11px] font-black transition-all flex items-center gap-2 ${deliveryMethod === 'pickup' ? 'bg-[#e6007e] text-white shadow-lg shadow-pink-100' : 'text-slate-300'}`}>
-                   <Store size={18} /> Recojo
-                 </button>
-                 <button onClick={() => setDeliveryMethod('delivery')} className={`px-8 py-3.5 rounded-2xl text-[11px] font-black transition-all flex items-center gap-2 ${deliveryMethod === 'delivery' ? 'bg-[#e6007e] text-white shadow-lg shadow-pink-100' : 'text-slate-300'}`}>
-                   <Truck size={18} /> Delivery
-                 </button>
+            <div className="hidden lg:block p-10 mt-8">
+              <div className="p-8 bg-slate-950 rounded-[2.5rem] text-white relative overflow-hidden group">
+                 <div className="absolute top-0 right-0 w-32 h-32 bg-[#e6007e] blur-[60px] opacity-20 group-hover:opacity-40 transition-opacity"></div>
+                 <Tag className="mb-4 opacity-40" />
+                 <h4 className="font-black text-2xl leading-tight mb-2">Club GIO+</h4>
+                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-relaxed">Únete y recibe beneficios <br /> exclusivos cada mes.</p>
               </div>
             </div>
+         </aside>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8 lg:gap-10">
-              {filteredProducts.map(product => (
-                <ProductCard key={product.id} product={product} onAdd={addToCart} />
-              ))}
-            </div>
-          </div>
-        </main>
-
-        <aside className={`fixed inset-y-0 right-0 w-full md:w-[32rem] bg-white z-[60] flex flex-col shadow-2xl transition-transform duration-700 ${isCartOpen ? 'translate-x-0' : 'translate-x-full'}`}>
-          <div className="p-10 border-b flex items-center justify-between bg-slate-50/50">
-            <div className="flex items-center gap-4">
-              <ShoppingCart size={24} className="text-[#e6007e]" />
-              <h2 className="text-2xl font-black tracking-tight">Tu Bolsa GIO+</h2>
-            </div>
-            <button onClick={() => setIsCartOpen(false)} className="p-3 bg-white border border-slate-100 rounded-2xl text-slate-300"><X size={24}/></button>
-          </div>
-          <div className="flex-1 overflow-y-auto p-10 space-y-8">
-            {cart.map(item => (
-              <div key={item.id} className="flex gap-6 items-center group">
-                <div className="w-20 h-20 rounded-2xl bg-slate-50 p-4 border border-slate-100 group-hover:bg-white group-hover:shadow-sm transition-all"><img src={item.image} className="w-full h-full object-contain mix-blend-multiply" /></div>
-                <div className="flex-1">
-                  <p className="font-bold text-sm truncate text-slate-900">{item.name}</p>
-                  <p className="text-base font-black text-[#e6007e]">S/ {item.price.toFixed(2)}</p>
-                  <div className="flex items-center gap-3 mt-2">
-                     <button onClick={() => removeFromCart(item.id)} className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400 hover:bg-slate-200 hover:text-slate-900">-</button>
-                     <span className="font-bold text-xs">{item.quantity}</span>
-                     <button onClick={() => addToCart(item)} className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400 hover:bg-slate-200 hover:text-slate-900">+</button>
+         <main className="flex-1 overflow-y-auto p-4 lg:p-12 no-scrollbar bg-[#f8fafc]/50">
+            <div className="max-w-7xl mx-auto space-y-12">
+               
+               {/* Search Móvil - Solo aparece si el buscador desktop está oculto */}
+               <div className="md:hidden">
+                  <div className="relative">
+                    <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                    <input 
+                      type="text" 
+                      placeholder="Buscar medicinas..." 
+                      className="w-full pl-14 pr-6 py-4 bg-white rounded-2xl shadow-sm border-none font-bold text-sm outline-none" 
+                      value={searchQuery}
+                      onChange={e => setSearchQuery(e.target.value)}
+                    />
                   </div>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="p-10 bg-white border-t space-y-8">
-            <div className="flex justify-between items-end px-2">
-               <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Monto Final</span>
-               <span className="text-5xl font-black tracking-tighter">S/ {total.toFixed(2)}</span>
-            </div>
-            <Button disabled={cart.length === 0} onClick={() => setView('checkout')} className="w-full !rounded-[2.5rem]">
-              Proceder al Pago <ChevronRight size={20} />
-            </Button>
-          </div>
-        </aside>
-      </div>
+               </div>
 
-      {/* Checkout con Números Dinámicos */}
-      {view === 'checkout' && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-2xl" onClick={() => setView('menu')}></div>
-          <div className="relative bg-white w-full max-w-5xl rounded-[3rem] lg:rounded-[4.5rem] shadow-2xl p-8 lg:p-20 grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-16 overflow-y-auto lg:overflow-hidden max-h-[95vh]">
-             <div className="space-y-8 lg:space-y-12">
-                <h2 className="text-3xl lg:text-5xl font-black text-slate-900 tracking-tighter">Confirma tu Pedido</h2>
-                <div className="space-y-8">
-                   {deliveryMethod === 'delivery' ? (
-                     <div className="space-y-3">
-                        <label className="text-[10px] font-black text-slate-300 uppercase px-4 flex items-center gap-2"><MapPin size={12}/> Dirección de Entrega</label>
-                        <textarea placeholder="Referencia exacta..." className="w-full p-6 lg:p-8 bg-slate-50/50 rounded-[2rem] outline-none font-bold text-base min-h-[120px] resize-none border border-slate-100 focus:bg-white" value={address} onChange={e => setAddress(e.target.value)} />
-                     </div>
-                   ) : (
-                     <div className="bg-slate-50 p-8 rounded-[2rem] flex items-center gap-6 border border-slate-100">
-                        <Store size={30} className="text-[#e6007e]" />
-                        <div className="space-y-1">
-                           <p className="text-base font-black">SEDE CENTRAL GIO+</p>
-                           <p className="text-[10px] font-bold text-slate-400">Recojo habilitado en 15 minutos.</p>
+               {/* Grid de Productos Premium */}
+               <section className="space-y-10">
+                  <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+                     <div className="space-y-2">
+                        <h2 className="text-4xl lg:text-6xl font-black text-slate-900 tracking-tighter">{activeCategory}</h2>
+                        <div className="flex items-center gap-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                           <Activity size={14} className="text-[#8cc63f]" /> Stock disponible en tiempo real
                         </div>
                      </div>
-                   )}
-                   <div className="space-y-4">
-                     <label className="text-[10px] font-black text-slate-300 uppercase px-4">Elija Medio de Pago</label>
-                     <div className="grid grid-cols-3 gap-3">
-                       {['yape', 'plin', 'whatsapp'].map(m => (
-                         <button key={m} onClick={() => setPaymentMethod(m as any)} className={`p-6 rounded-[2.5rem] border transition-all flex flex-col items-center gap-2 ${paymentMethod === m ? 'border-[#e6007e] bg-pink-50/30' : 'border-slate-100 hover:border-slate-200'}`}>
-                           <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-black text-lg ${m === 'yape' ? 'bg-[#8C2C94]' : m === 'plin' ? 'bg-[#00BCD4]' : 'bg-[#25D366]'}`}>{m[0].toUpperCase()}</div>
-                           <span className="text-[9px] font-black uppercase tracking-widest">{m}</span>
-                         </button>
-                       ))}
-                     </div>
-                   </div>
+                  </div>
 
-                   {(paymentMethod === 'yape' || paymentMethod === 'plin') && (
-                     <div className="bg-slate-900 text-white p-8 rounded-[2.5rem] animate-in fade-in zoom-in duration-300 shadow-2xl relative overflow-hidden">
-                        <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-16 -mt-16"></div>
-                        <p className="text-[10px] font-bold uppercase opacity-50 tracking-[0.2em] mb-4">Transferir ahora a {paymentMethod.toUpperCase()}</p>
-                        <div className="flex items-center gap-4">
-                           <Smartphone size={32} className="text-[#8cc63f]" />
-                           <p className="text-4xl font-black tracking-widest">{paymentMethod === 'yape' ? config.yapeNumber : config.plinNumber}</p>
-                        </div>
-                        <p className="text-[10px] font-bold opacity-30 mt-4 uppercase">GIO+ FARMA INTERNACIONAL S.A.C.</p>
-                     </div>
-                   )}
-                </div>
-             </div>
+                  <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 lg:gap-10">
+                     {filteredProducts.map((p, idx) => (
+                       <div key={p.id} className="bg-white rounded-[2rem] lg:rounded-[3rem] p-5 lg:p-10 border border-slate-50 shadow-sm hover:shadow-2xl transition-all duration-500 group flex flex-col h-full animate-fade-up" style={{ animationDelay: `${idx * 0.05}s` }}>
+                          <div className="aspect-square bg-slate-50/50 rounded-[2rem] p-6 mb-6 lg:mb-10 relative overflow-hidden shrink-0">
+                             {p.promo && <div className="absolute top-4 left-4 bg-[#e6007e] text-white px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest shadow-xl">Oferta</div>}
+                             <img src={p.image} className="w-full h-full object-contain mix-blend-multiply group-hover:scale-110 transition-transform duration-700" />
+                          </div>
+                          
+                          <div className="flex-1 space-y-2 mb-8">
+                             <span className="text-[8px] lg:text-[10px] font-black text-[#8cc63f] uppercase tracking-widest">{p.category}</span>
+                             <h3 className="font-black text-slate-900 text-sm lg:text-xl leading-tight line-clamp-2">{p.name}</h3>
+                             {p.scientific_name && <p className="text-[9px] font-bold text-slate-400 italic">Comp: {p.scientific_name}</p>}
+                          </div>
 
-             <div className="bg-slate-50/50 p-8 lg:p-12 rounded-[2.5rem] lg:rounded-[4rem] flex flex-col justify-between border border-slate-100 shadow-inner">
-                <div className="space-y-6">
-                   <h3 className="text-2xl font-black tracking-tight">Resumen de Cuenta</h3>
-                   <div className="space-y-4 max-h-56 overflow-y-auto pr-2 custom-scrollbar">
-                     {cart.map(i => (
-                       <div key={i.id} className="flex justify-between items-center text-sm">
-                          <span className="text-slate-400 font-medium">{i.name} <span className="text-slate-900 font-bold ml-1">x{i.quantity}</span></span>
-                          <span className="font-black text-slate-900">S/ {(i.price * i.quantity).toFixed(2)}</span>
+                          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mt-auto">
+                             <div className="flex flex-col">
+                                <span className="text-[8px] lg:text-[10px] font-black text-slate-300 uppercase">P. Sugerido</span>
+                                <span className="text-xl lg:text-3xl font-black text-slate-900">S/ {p.price.toFixed(2)}</span>
+                             </div>
+                             <button onClick={() => addToCart(p)} className="p-4 lg:p-5 bg-slate-900 text-white rounded-2xl hover:bg-[#e6007e] transition-all flex items-center justify-center shadow-lg active:scale-90">
+                                <Plus size={24} strokeWidth={3} />
+                             </button>
+                          </div>
                        </div>
                      ))}
-                   </div>
-                </div>
-                <div className="space-y-6 pt-8 border-t border-slate-200">
-                   <div className="flex justify-between items-end">
-                      <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Total a Pagar</span>
-                      <span className="text-4xl lg:text-5xl font-black text-[#e6007e] tracking-tighter">S/ {total.toFixed(2)}</span>
-                   </div>
-                   <Button onClick={handleFinalizeOrder} loading={isSyncingOdoo} className="w-full !rounded-[2.5rem] !py-7 !text-xl shadow-2xl shadow-pink-100">
-                     Sincronizar con Odoo
-                   </Button>
-                   <div className="flex items-center justify-center gap-2 opacity-30">
-                      <ShieldCheck size={16} />
-                      <span className="text-[9px] font-bold uppercase tracking-widest">Conexión Segura XML-RPC</span>
-                   </div>
-                </div>
-             </div>
-             
-             <button onClick={() => setView('menu')} className="absolute top-8 right-8 lg:top-12 lg:right-12 p-3 hover:bg-slate-50 rounded-full transition-all text-slate-200"><X size={32} /></button>
-          </div>
-        </div>
-      )}
+                  </div>
+               </section>
+            </div>
+         </main>
+      </div>
 
-      {/* Panel Administrativo (Configuración) - Solo renderizado si isAdminMode */}
-      {isSettingsOpen && isAdminMode && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-xl" onClick={() => setIsSettingsOpen(false)}></div>
-          <div className="relative bg-white w-full max-w-2xl rounded-[3rem] p-8 lg:p-14 space-y-10 animate-in zoom-in duration-300 shadow-3xl">
-             <div className="flex justify-between items-center">
-                <div className="space-y-1">
-                   <div className="flex items-center gap-3">
-                      <Settings className="text-[#e6007e]" size={32} />
-                      <h2 className="text-3xl font-black tracking-tight">Panel Administrativo</h2>
-                   </div>
-                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] px-1">Control de Sistemas GIO+ FARMA</p>
-                </div>
-                <button onClick={() => setIsSettingsOpen(false)} className="p-3 bg-slate-50 rounded-2xl hover:bg-slate-100"><X size={24} /></button>
-             </div>
+      {/* Navegación Móvil Inferior con Estilo Apple */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 h-24 bg-white/80 backdrop-blur-xl border-t border-slate-50 flex items-center justify-around px-6 z-[150] pb-4">
+         {[
+           { icon: Home, label: 'Inicio', view: 'welcome' },
+           { icon: MenuIcon, label: 'Catálogo', view: 'menu' },
+           { icon: Activity, label: 'IA Salud', action: () => setIsAiOpen(true) },
+           { icon: User, label: 'Perfil' }
+         ].map((item, i) => (
+           <button 
+             key={i}
+             onClick={() => item.view ? setView(item.view as any) : item.action && item.action()}
+             className={`flex flex-col items-center gap-1.5 ${view === item.view ? 'text-[#e6007e]' : 'text-slate-300'} transition-all`}
+           >
+              <item.icon size={22} strokeWidth={view === item.view ? 2.5 : 2} />
+              <span className="text-[9px] font-black uppercase tracking-widest">{item.label}</span>
+           </button>
+         ))}
+      </nav>
 
-             <div className="space-y-10">
-                <section className="space-y-6">
-                   <div className="flex items-center gap-3 border-b border-slate-100 pb-3">
-                      <Database size={18} className="text-slate-400" />
-                      <h3 className="text-sm font-black uppercase text-slate-900">Credenciales Odoo (XML-RPC)</h3>
-                   </div>
-                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black uppercase text-slate-400 px-2 flex items-center gap-2"><Globe size={12}/> URL Instancia</label>
-                        <input className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm focus:bg-white focus:ring-1 focus:ring-slate-100 transition-all" value={config.url} onChange={e => setConfig({...config, url: e.target.value})} placeholder="https://ejemplo.odoo.com" />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black uppercase text-slate-400 px-2 flex items-center gap-2"><Database size={12}/> Nombre Base Datos</label>
-                        <input className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm focus:bg-white focus:ring-1 focus:ring-slate-100 transition-all" value={config.db} onChange={e => setConfig({...config, db: e.target.value})} placeholder="odoo_db_01" />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black uppercase text-slate-400 px-2 flex items-center gap-2"><User size={12}/> Usuario Admin</label>
-                        <input className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm focus:bg-white focus:ring-1 focus:ring-slate-100 transition-all" value={config.username} onChange={e => setConfig({...config, username: e.target.value})} placeholder="admin@giofarma.com" />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black uppercase text-slate-400 px-2 flex items-center gap-2"><Lock size={12}/> Odoo API Key / Pass</label>
-                        <input type="password" placeholder="Key de usuario Odoo" className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm focus:bg-white focus:ring-1 focus:ring-slate-100 transition-all" value={config.apiKey} onChange={e => setConfig({...config, apiKey: e.target.value})} />
-                      </div>
-                   </div>
-                </section>
+      {/* Carrito y AI Assist Modals */}
+      {/* ... (Se mantienen las funciones de Cart y AI pero con refinamientos de UI en el fondo) ... */}
+      
+      {/* Cart Drawer Premium */}
+      <div className={`fixed inset-0 z-[300] ${isCartOpen ? 'visible' : 'invisible'} transition-all`}>
+         <div className={`absolute inset-0 bg-slate-950/20 backdrop-blur-md transition-opacity duration-500 ${isCartOpen ? 'opacity-100' : 'opacity-0'}`} onClick={() => setIsCartOpen(false)}></div>
+         <div className={`absolute right-0 top-0 h-full w-full lg:max-w-lg bg-white shadow-[0_0_100px_rgba(0,0,0,0.1)] transform transition-transform duration-700 flex flex-col ${isCartOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+            <div className="p-10 border-b flex justify-between items-center bg-slate-50/30">
+               <div>
+                  <h3 className="text-2xl font-black tracking-tight">Tu Selección</h3>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Garantía de calidad GIO+</p>
+               </div>
+               <button onClick={() => setIsCartOpen(false)} className="p-3 bg-white rounded-2xl border border-slate-100 hover:text-red-500 transition-all"><X size={28}/></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-10 space-y-8 no-scrollbar">
+               {cart.length === 0 ? (
+                 <div className="h-full flex flex-col items-center justify-center opacity-20 text-center gap-6">
+                    <ShoppingCart size={100} strokeWidth={1} />
+                    <p className="font-black text-sm uppercase tracking-widest">Aún no has agregado salud</p>
+                 </div>
+               ) : cart.map(item => (
+                 <div key={item.id} className="flex gap-6 p-4 hover:bg-slate-50 rounded-[2rem] transition-all">
+                    <div className="w-24 h-24 bg-white p-3 rounded-2xl shrink-0 border border-slate-50 shadow-sm"><img src={item.image} className="w-full h-full object-contain" /></div>
+                    <div className="flex-1 py-1 space-y-1">
+                       <p className="font-black text-slate-900">{item.name}</p>
+                       <p className="font-black text-[#e6007e] text-lg">S/ {item.price.toFixed(2)}</p>
+                       <div className="flex items-center gap-4 pt-3">
+                          <div className="flex items-center bg-white border border-slate-100 rounded-xl p-1 shadow-sm">
+                             <button onClick={() => setCart(prev => prev.map(i => i.id === item.id ? {...i, quantity: Math.max(1, i.quantity - 1)} : i))} className="p-2 hover:text-[#e6007e] transition-colors"><Minus size={14}/></button>
+                             <span className="w-10 text-center text-sm font-black">{item.quantity}</span>
+                             <button onClick={() => addToCart(item)} className="p-2 hover:text-[#e6007e] transition-colors"><Plus size={14}/></button>
+                          </div>
+                       </div>
+                    </div>
+                    <button onClick={() => setCart(prev => prev.filter(i => i.id !== item.id))} className="text-slate-200 hover:text-red-500 transition-colors self-start mt-2"><Trash2 size={20}/></button>
+                 </div>
+               ))}
+            </div>
+            <div className="p-10 border-t bg-slate-50/50 space-y-6">
+               <div className="flex justify-between items-end">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Inversión</span>
+                  <span className="text-5xl font-black text-slate-900 leading-none">S/ {total.toFixed(2)}</span>
+               </div>
+               <Button disabled={cart.length === 0} onClick={() => setView('checkout')} className="w-full py-7 text-lg shadow-2xl">Confirmar Mi Pedido</Button>
+            </div>
+         </div>
+      </div>
 
-                <section className="space-y-6">
-                   <div className="flex items-center gap-3 border-b border-slate-100 pb-3">
-                      <Smartphone size={18} className="text-slate-400" />
-                      <h3 className="text-sm font-black uppercase text-slate-900">Números para Cobranza</h3>
-                   </div>
-                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black uppercase text-slate-400 px-2 flex items-center gap-2"><Activity size={12}/> Número Yape</label>
-                        <input className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm focus:bg-white focus:ring-1 focus:ring-slate-100 transition-all" value={config.yapeNumber} onChange={e => setConfig({...config, yapeNumber: e.target.value})} placeholder="999 999 999" />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black uppercase text-slate-400 px-2 flex items-center gap-2"><Zap size={12}/> Número Plin</label>
-                        <input className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm focus:bg-white focus:ring-1 focus:ring-slate-100 transition-all" value={config.plinNumber} onChange={e => setConfig({...config, plinNumber: e.target.value})} placeholder="999 999 999" />
-                      </div>
-                   </div>
-                </section>
-             </div>
-
-             <div className="pt-8 border-t flex flex-col items-center gap-4">
-                <Button onClick={() => setIsSettingsOpen(false)} className="w-full !rounded-[2rem] shadow-2xl">Guardar y Sincronizar</Button>
-                <div className="flex items-center gap-3 opacity-30 mt-2">
-                   <button onClick={() => setIsAdminMode(false)} className="text-[9px] font-black uppercase tracking-widest hover:underline">Cerrar Sesión Admin</button>
-                </div>
-             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Pantalla Éxito */}
-      {view === 'success' && (
-        <div className="fixed inset-0 z-[300] bg-white flex flex-col items-center justify-center p-8 text-center animate-in fade-in duration-700">
-          <div className="w-40 h-40 bg-slate-50 text-[#8cc63f] rounded-[4.5rem] flex items-center justify-center mb-10 shadow-2xl border border-slate-50 animate-bounce duration-[3000ms]"><CheckCircle2 size={80} /></div>
-          <div className="space-y-4">
-             <h1 className="text-5xl font-black tracking-tighter uppercase text-slate-900">ORDEN CONFIRMADA</h1>
-             <p className="text-xl text-slate-400 font-medium italic">Sincronizado exitosamente con Odoo ERP.</p>
-          </div>
-          <div className="mt-16 bg-slate-900 p-12 rounded-[3.5rem] w-full max-w-xl text-white">
-             <p className="text-[10px] font-black uppercase opacity-40 mb-2">Comprobante Interno</p>
-             <p className="text-3xl font-black">#GIO-{Math.floor(Math.random()*90000)+10000}</p>
-          </div>
-          <div className="mt-12"><Button onClick={() => setView('welcome')} variant="outline" className="!px-20 !py-5 !text-xl">Volver al Inicio</Button></div>
-        </div>
-      )}
-
-      {/* Asistente AI GIO+ */}
+      {/* AI Assistant Full Screen Mobile */}
       {isAiOpen && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-end p-4 md:p-10">
-          <div className="absolute inset-0 bg-slate-900/10 backdrop-blur-sm" onClick={() => setIsAiOpen(false)}></div>
-          <div className="relative w-full max-w-lg h-full bg-white flex flex-col animate-in slide-in-from-right duration-700 shadow-3xl rounded-[3rem] lg:rounded-[4rem] overflow-hidden border border-slate-100">
-             <div className="p-10 bg-slate-900 text-white flex items-center justify-between">
-                <div className="flex items-center gap-5"><Sparkles size={28} className="text-[#8cc63f]" /><h3 className="text-xl font-black">Asesor GIO+ AI</h3></div>
-                <button onClick={() => setIsAiOpen(false)}><X size={28} /></button>
-             </div>
-             <div className="flex-1 p-8 overflow-y-auto space-y-8 bg-slate-50/20">
-                <div className="flex gap-4">
-                  <Logo size="sm" onClick={handleLogoClick} />
-                  <div className="bg-white p-6 rounded-[2rem] rounded-tl-none text-xs font-medium text-slate-600 shadow-sm border border-slate-50">Hola, soy su asesor experto. ¿En qué puedo orientarle hoy sobre su salud o pedido?</div>
-                </div>
-                {aiResponse && <div className="flex gap-4 flex-row-reverse animate-in slide-in-from-bottom-2"><div className="bg-slate-900 p-6 rounded-[2rem] rounded-tr-none text-xs text-white leading-relaxed shadow-2xl">{aiResponse}</div></div>}
-                {isAiLoading && <div className="flex justify-center p-4"><div className="w-2 h-2 bg-[#e6007e] rounded-full animate-bounce"></div></div>}
-             </div>
-             <div className="p-8 bg-white border-t flex gap-4">
-                <input placeholder="Escriba su consulta médica..." value={aiMessage} onChange={e => setAiMessage(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAiAsk()} className="flex-1 px-6 py-5 bg-slate-50 rounded-[1.5rem] outline-none text-sm font-bold" />
-                <button onClick={handleAiAsk} className="p-5 bg-slate-900 text-white rounded-[1.5rem] shadow-xl hover:scale-105 transition-all"><ArrowUpRight size={24} /></button>
-             </div>
-          </div>
+        <div className="fixed inset-0 z-[400] flex justify-center lg:justify-end lg:p-10 animate-fade-up">
+           <div className="absolute inset-0 bg-slate-950/20 backdrop-blur-xl hidden lg:block" onClick={() => setIsAiOpen(false)}></div>
+           <div className="relative w-full lg:max-w-xl h-full bg-white lg:rounded-[4rem] shadow-3xl flex flex-col overflow-hidden">
+              <div className="p-10 bg-slate-950 text-white flex justify-between items-center shrink-0">
+                 <div className="space-y-1">
+                    <h3 className="text-2xl font-black flex items-center gap-3">Asistente GIO+ <Sparkles size={20} className="text-[#8cc63f]"/></h3>
+                    <p className="text-[10px] font-bold text-[#8cc63f] uppercase tracking-widest">Profesional Farmacéutico Certificado</p>
+                 </div>
+                 <button onClick={() => setIsAiOpen(false)} className="p-3 bg-white/10 rounded-2xl hover:bg-white/20"><X size={28}/></button>
+              </div>
+              <div className="flex-1 p-10 overflow-y-auto space-y-8 bg-slate-50/30 no-scrollbar">
+                 {aiResponse && (
+                   <div className="bg-white p-10 rounded-[2.5rem] rounded-tr-none text-base font-medium text-slate-700 border border-slate-100 shadow-sm leading-relaxed animate-scale-in">
+                      {aiResponse}
+                      <div className="mt-8 pt-6 border-t border-slate-50 flex items-center gap-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                         <Info size={16} className="text-[#8cc63f]"/> Nota: Consulta siempre a tu médico.
+                      </div>
+                   </div>
+                 )}
+                 {isAiLoading && <div className="flex gap-2 p-6 bg-white rounded-full w-fit shadow-sm"><div className="w-2 h-2 bg-[#e6007e] rounded-full animate-bounce"></div><div className="w-2 h-2 bg-[#e6007e] rounded-full animate-bounce delay-75"></div><div className="w-2 h-2 bg-[#e6007e] rounded-full animate-bounce delay-150"></div></div>}
+              </div>
+              <div className="p-8 lg:p-10 bg-white border-t flex gap-4 shrink-0 pb-16 lg:pb-10">
+                 <input 
+                    className="flex-1 bg-slate-50 p-6 rounded-[2rem] outline-none font-bold text-sm focus:ring-2 focus:ring-[#e6007e]/10 transition-all border border-slate-100" 
+                    placeholder="Escribe tu consulta de salud..." 
+                    value={aiMessage} 
+                    onChange={e => setAiMessage(e.target.value)} 
+                    onKeyDown={e => e.key === 'Enter' && handleAiAsk()} 
+                 />
+                 <button onClick={handleAiAsk} className="p-6 bg-slate-950 text-white rounded-[2rem] hover:bg-[#e6007e] transition-all shadow-xl"><ArrowUpRight size={28}/></button>
+              </div>
+           </div>
+        </div>
+      )}
+
+      {/* Success View Premium */}
+      {view === 'success' && (
+        <div className="fixed inset-0 z-[600] bg-white flex flex-col items-center justify-center p-8 text-center animate-fade-up">
+           <div className="w-40 h-40 bg-[#8cc63f]/10 text-[#8cc63f] rounded-[4rem] flex items-center justify-center mb-10 shadow-inner animate-pulse">
+              <CheckCircle2 size={80} strokeWidth={2.5} />
+           </div>
+           <h1 className="text-5xl lg:text-7xl font-black text-slate-900 tracking-tighter mb-4">¡PEDIDO RECIBIDO!</h1>
+           <p className="text-xl text-slate-400 font-medium italic mb-12 max-w-md mx-auto leading-relaxed">Tu salud está en camino. GIO+FARMA te garantiza la entrega en 30 minutos o menos.</p>
+           <Button onClick={() => { setView('welcome'); setCart([]); }} variant="dark" className="px-16">Volver al Portal Principal</Button>
+        </div>
+      )}
+
+      {/* Auth Modal Admin */}
+      {showPassModal && (
+        <div className="fixed inset-0 z-[500] flex items-center justify-center p-6 animate-fade-up">
+           <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-2xl" onClick={() => setShowPassModal(false)}></div>
+           <div className="relative bg-white w-full max-w-md rounded-[4rem] p-16 text-center space-y-10 shadow-3xl border border-white">
+              <div className="w-24 h-24 bg-[#e6007e]/10 text-[#e6007e] rounded-[2.5rem] flex items-center justify-center mx-auto"><KeyRound size={48}/></div>
+              <div className="space-y-2">
+                 <h3 className="text-3xl font-black text-slate-900 tracking-tight">Acceso Central</h3>
+                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Identificación de Personal GIO+ FARMA</p>
+              </div>
+              <input type="password" autoFocus placeholder="PIN" className="w-full p-8 bg-slate-50 rounded-[2.5rem] border-2 border-slate-100 text-center text-4xl font-black outline-none focus:border-[#e6007e] transition-all tracking-[0.4em]" value={passInput} onChange={e => setPassInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleVerifyPass()} />
+              <Button onClick={handleVerifyPass} className="w-full py-7 text-xl">Ingresar al Sistema</Button>
+           </div>
+        </div>
+      )}
+
+      {/* Checkout Modal Premium */}
+      {view === 'checkout' && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 lg:p-6 animate-fade-up">
+           <div className="absolute inset-0 bg-slate-950/40 backdrop-blur-xl" onClick={() => setView('menu')}></div>
+           <div className="relative bg-white w-full max-w-xl rounded-[4rem] p-10 lg:p-16 space-y-10 shadow-3xl overflow-y-auto max-h-[90vh] no-scrollbar">
+              <div className="flex justify-between items-start">
+                 <h2 className="text-4xl lg:text-5xl font-black tracking-tighter">Resumen <br /> de Pedido</h2>
+                 <ShieldCheck size={40} className="text-[#8cc63f]" />
+              </div>
+              <div className="bg-slate-50 p-10 rounded-[3rem] space-y-5 border border-slate-100 shadow-inner">
+                 <div className="flex justify-between text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]"><span>Salud & Bienestar</span><span>S/ {total.toFixed(2)}</span></div>
+                 <div className="flex justify-between text-[10px] font-black text-[#8cc63f] uppercase tracking-[0.2em]"><span>Logística GIO+</span><span>Cortesía</span></div>
+                 <div className="flex justify-between items-end border-t border-slate-200 pt-8 text-[#e6007e]">
+                    <span className="text-[10px] font-black uppercase tracking-[0.2em]">Inversión Total</span>
+                    <span className="text-5xl font-black leading-none tracking-tighter">S/ {total.toFixed(2)}</span>
+                 </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4 lg:gap-6">
+                 <button className="p-6 lg:p-8 border-2 border-slate-100 rounded-[2.5rem] font-black uppercase text-[10px] tracking-widest flex flex-col items-center gap-3 hover:border-slate-900 transition-all"><Store size={22}/> Recojo Tienda</button>
+                 <button className="p-6 lg:p-8 border-2 border-[#e6007e] bg-pink-50/50 rounded-[2.5rem] font-black uppercase text-[10px] tracking-widest text-[#e6007e] flex flex-col items-center gap-3 shadow-xl shadow-pink-100"><Truck size={22}/> Delivery VIP</button>
+              </div>
+              <Button onClick={() => setView('success')} className="w-full py-8 text-xl shadow-2xl">Finalizar Mi Compra</Button>
+           </div>
         </div>
       )}
     </div>
   );
 };
 
-// --- Iniciar Aplicación ---
-
-const container = document.getElementById('root');
-if (container) {
-  const root = createRoot(container);
-  root.render(<App />);
+const rootElement = document.getElementById('root');
+if (rootElement) {
+  createRoot(rootElement).render(<App />);
 }

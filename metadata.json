@@ -1,5 +1,7 @@
 {
-  "name": "GIO+FARMA Mobile - Pedidos Rápidos",
-  "description": "Experiencia de autopedido farmacéutico optimizada para móviles, con catálogo intuitivo y pagos rápidos.",
-  "requestFramePermissions": []
+  "name": "GIO+FARMA ERP Connector",
+  "description": "Plataforma avanzada de autopedido farmacéutico con sincronización XML-RPC Odoo, gestión de inventario y mapeo de categorías inteligente.",
+  "requestFramePermissions": [
+    "camera"
+  ]
 }
