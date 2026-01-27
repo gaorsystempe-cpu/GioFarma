@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 
 /* ============================================================
-   ENGINE: ODOO XML-RPC MASTER (PRO CHECKOUT V21)
+   ENGINE: ODOO XML-RPC MASTER (PRO CHECKOUT V23)
    ============================================================ */
 
 const xmlEscape = (str: string) =>
@@ -119,8 +119,8 @@ const DEFAULT_CONFIG = {
   db: "baltodano_master",
   user: "luis@gaorsystem.com",
   apiKey: "8d06549a109c1c0f8847610a9f8d68250de8bd39",
-  whatsapp: "51921312386",
-  yape: "921312386",
+  whatsapp: "51981383242",
+  yape: "981383242",
   companyName: "GIOFARMA",
   hiddenProducts: [],
   hiddenCategories: [],
@@ -235,15 +235,43 @@ const CheckoutModal = ({ cart, config, onClose, onOrderSuccess }: any) => {
       const uid = await client.rpcCall('common', 'authenticate', [config.db, config.user, config.apiKey, {}]);
       if (!uid) throw new Error("Error de conexión con Odoo.");
 
+      // --- 1. BUSCAR O CREAR CLIENTE (res.partner) ---
+      // Buscamos si existe un partner con ese teléfono (mobile o phone)
+      const partners = await client.rpcCall('object', 'execute_kw', [
+        config.db, uid, config.apiKey,
+        'res.partner', 'search',
+        [[['phone', '=', userData.phone]]]
+      ]);
+
+      let finalPartnerId;
+      if (Array.isArray(partners) && partners.length > 0) {
+        finalPartnerId = partners[0]; // Usamos el existente
+      } else {
+        // Creamos uno nuevo
+        finalPartnerId = await client.rpcCall('object', 'execute_kw', [
+          config.db, uid, config.apiKey,
+          'res.partner', 'create',
+          [{
+            name: userData.name,
+            phone: userData.phone,
+            street: userData.address || 'Recojo en tienda',
+            customer_rank: 1,
+            company_type: 'person'
+          }]
+        ]);
+      }
+
+      // --- 2. CREAR LA ORDEN DE VENTA (sale.order) ---
       const orderId = await client.rpcCall('object', 'execute_kw', [
         config.db, uid, config.apiKey,
         'sale.order', 'create',
         [{
-          partner_id: 1, 
+          partner_id: finalPartnerId, 
           note: `Portal Autopedido: ${orderType.toUpperCase()} - Cliente: ${userData.name} (${userData.phone}) - Pago via YAPE confirmado. Dirección: ${userData.address || 'RECOJO EN TIENDA'}`
         }]
       ]);
 
+      // --- 3. CREAR LAS LÍNEAS DEL PEDIDO ---
       for (const item of cart) {
         await client.rpcCall('object', 'execute_kw', [
           config.db, uid, config.apiKey,
@@ -258,11 +286,20 @@ const CheckoutModal = ({ cart, config, onClose, onOrderSuccess }: any) => {
         ]);
       }
 
-      const summary = cart.map((i: any) => `- ${i.q}x ${i.name} (${i.u}): S/ ${(i.finalPrice * i.q).toFixed(2)}`).join('%0A');
-      const waMsg = `*ORDEN ODOO: #${orderId}*%0A%0A*Cliente:* ${userData.name}%0A*Telf:* ${userData.phone}%0A*Tipo:* ${orderType === 'delivery' ? 'DELIVERY' : 'RECOJO EN TIENDA'}%0A${orderType === 'delivery' ? `*Dirección:* ${userData.address}%0A` : ''}%0A*ESTADO PAGO:* Ya copié el número de Yape y procederé a realizar el pago en breve.%0A%0A*DETALLE:*%0A${summary}%0A%0A*TOTAL A PAGAR: S/ ${total.toFixed(2)}*`;
-      window.open(`https://wa.me/${config.whatsapp}?text=${waMsg}`, '_blank');
+      // --- 4. REDIRECCIÓN WHATSAPP ---
+      const summary = cart.map((i: any) => `• ${i.q}x ${i.name} (${i.u}) -> S/ ${(i.finalPrice * i.q).toFixed(2)}`).join('%0A');
+      const waMsg = `*🚀 NUEVO PEDIDO - GIOFARMA*%0A%0A*ORDEN ODOO:* #${orderId}%0A*CLIENTE:* ${userData.name}%0A*TELÉFONO:* ${userData.phone}%0A*TIPO:* ${orderType === 'delivery' ? '🚚 DELIVERY' : '🏪 RECOJO EN TIENDA'}%0A${orderType === 'delivery' ? `*DIRECCIÓN:* ${userData.address}%0A` : ''}%0A*ESTADO PAGO:* Confirmado via YAPE%0A%0A*DETALLE:*%0A${summary}%0A%0A*TOTAL A PAGAR: S/ ${total.toFixed(2)}*%0A%0A_Enviado desde el Portal de Autopedido_`;
+      
+      let targetPhone = (config.whatsapp || DEFAULT_CONFIG.whatsapp).toString().replace(/\D/g, '');
+      if (targetPhone.length === 9 && targetPhone.startsWith('9')) targetPhone = '51' + targetPhone;
+      
+      window.open(`https://wa.me/${targetPhone}?text=${waMsg}`, '_blank');
       onOrderSuccess();
-    } catch (e: any) { alert(`Error al procesar: ${e.message}`); } finally { setIsProcessing(false); }
+    } catch (e: any) { 
+      alert(`Error al procesar: ${e.message}`); 
+    } finally { 
+      setIsProcessing(false); 
+    }
   };
 
   return (
@@ -347,7 +384,6 @@ const ProductDetailModal = ({ product, onClose, onAdd }: any) => {
       <div className="relative w-full max-w-6xl bg-white md:rounded-[4rem] overflow-hidden shadow-2xl flex flex-col md:flex-row max-h-[92vh] animate-scale-in">
         <button onClick={onClose} className="absolute top-6 right-6 z-[610] p-4 bg-slate-100 rounded-full text-slate-400 hover:bg-[#e6007e] hover:text-white transition-all shadow-sm"><X size={26}/></button>
         
-        {/* LADO IZQUIERDO: IMAGEN MAXIMIZADA */}
         <div className="w-full md:w-[58%] bg-[#fcfcfd] p-8 flex flex-col items-stretch border-b md:border-b-0 md:border-r border-slate-100 overflow-hidden">
            <div className="flex-1 min-h-[400px] max-h-[550px] flex items-center justify-center bg-white rounded-[3.5rem] p-6 shadow-sm border border-slate-50 overflow-hidden">
              {product.image ? (
@@ -370,7 +406,6 @@ const ProductDetailModal = ({ product, onClose, onAdd }: any) => {
            </div>
         </div>
 
-        {/* LADO DERECHO: INFO COMERCIAL REEQUILIBRADA */}
         <div className="w-full md:w-[42%] p-10 md:p-14 flex flex-col justify-center bg-white">
            <div className="space-y-12">
               <div className="space-y-4">
@@ -391,7 +426,6 @@ const ProductDetailModal = ({ product, onClose, onAdd }: any) => {
                  </div>
               </div>
 
-              {/* Presentaciones (UOM) Restauradas */}
               <div className="space-y-5">
                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest italic flex items-center gap-2">
                     <Layers size={16}/> Presentación Disponible
@@ -405,7 +439,6 @@ const ProductDetailModal = ({ product, onClose, onAdd }: any) => {
                  </div>
               </div>
 
-              {/* Cantidad y Botón de Compra */}
               <div className="flex gap-4 pt-6">
                  <div className="flex items-center justify-between bg-slate-50 px-6 py-5 rounded-[2rem] min-w-[150px] border border-slate-100 shadow-inner">
                     <button onClick={() => setQty(Math.max(1, qty - 1))} className="text-slate-400 hover:text-[#e6007e] transition-colors"><Minus size={22}/></button>
@@ -442,7 +475,7 @@ const App = () => {
   const [showCheckout, setShowCheckout] = useState(false);
 
   const [config, setConfig] = useState(() => {
-    const saved = localStorage.getItem('giofarma_config_v21');
+    const saved = localStorage.getItem('giofarma_config_v23');
     return saved ? { ...DEFAULT_CONFIG, ...JSON.parse(saved) } : DEFAULT_CONFIG;
   });
 
@@ -453,7 +486,7 @@ const App = () => {
 
   const saveConfig = (newConfig: any) => {
     setConfig(newConfig);
-    localStorage.setItem('giofarma_config_v21', JSON.stringify(newConfig));
+    localStorage.setItem('giofarma_config_v23', JSON.stringify(newConfig));
   };
 
   const syncERP = useCallback(async (isSilent = false) => {
