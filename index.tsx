@@ -1,642 +1,764 @@
 
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { 
-  Search, 
-  ShoppingCart, 
-  ChevronRight, 
-  ChevronLeft,
-  Plus, 
-  Minus,
-  X, 
-  Sparkles, 
-  CheckCircle2,
-  ArrowRight,
-  Truck,
-  Store,
-  Stethoscope,
-  LayoutDashboard,
-  Trash2,
-  Info,
-  ArrowUpRight,
-  Zap,
-  Tag,
-  Heart,
-  ShieldCheck,
-  Home,
-  Menu as MenuIcon,
-  Stethoscope as DoctorIcon,
-  KeyRound,
-  Activity,
-  User,
-  TrendingUp,
-  Package,
-  DollarSign,
-  LogOut,
-  BarChart3,
-  Clock
+  Search, ShoppingCart, Plus, Minus, X, RefreshCw, Settings, 
+  ShoppingBag, ShieldCheck, ChevronRight, Package, Activity, 
+  Layers, FileText, Heart, Truck, Store, HeartPulse, ChevronLeft, 
+  Filter, LayoutGrid, Eye, EyeOff, Verified, ArrowUpRight, PackagePlus,
+  CheckCircle2, Info, BookOpen, Sparkles, Zap, Shield, Clock, ChevronDown, 
+  MapPin, User, Phone, Send, ChevronRight as ChevronRightIcon, Copy, Check,
+  Building2, MessageCircle, Image as ImageIcon, Trash2
 } from 'lucide-react';
-import { GoogleGenAI } from "@google/genai";
 
-// --- Tipos y Constantes ---
+/* ============================================================
+   ENGINE: ODOO XML-RPC MASTER (PRO CHECKOUT V21)
+   ============================================================ */
 
-interface Product {
-  id: number;
-  name: string;
-  price: number;
-  description: string;
-  category: string;
-  image: string;
-  stock: number;
-  promo?: boolean;
-  scientific_name?: string;
-}
+const xmlEscape = (str: string) =>
+  str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
-interface CartItem extends Product {
-  quantity: number;
-}
+const serialize = (value: any): string => {
+  if (value === null || value === undefined) return '<value><nil/></value>';
+  let content = '';
+  if (typeof value === 'number') {
+    content = Number.isInteger(value) ? `<int>${value}</int>` : `<double>${value}</double>`;
+  } else if (typeof value === 'string') {
+    content = `<string>${xmlEscape(value)}</string>`;
+  } else if (typeof value === 'boolean') {
+    content = `<boolean>${value ? '1' : '0'}</boolean>`;
+  } else if (Array.isArray(value)) {
+    content = `<array><data>${value.map(v => serialize(v)).join('')}</data></array>`;
+  } else if (typeof value === 'object') {
+    if (value instanceof Date) {
+      const iso = value.toISOString().replace(/\.\d+Z$/, '');
+      content = `<dateTime.iso8601>${iso}</dateTime.iso8601>`;
+    } else {
+      content = `<struct>${Object.entries(value).map(([k, v]) =>
+        `<member><name>${xmlEscape(k)}</name>${serialize(v)}</member>`
+      ).join('')}</struct>`;
+    }
+  }
+  return `<value>${content}</value>`;
+};
 
-const INITIAL_PRODUCTS: Product[] = [
-  { id: 1, name: "Panadol Forte 500mg", scientific_name: "Paracetamol", price: 1.20, description: "Alivio efectivo para dolores moderados y fiebre.", category: "Medicamentos", image: "https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?w=400", stock: 150, promo: true },
-  { id: 2, name: "CeraVe Crema Facial", scientific_name: "Ceramidas", price: 89.00, description: "Hidratación profunda para pieles sensibles.", category: "Cuidado de Piel", image: "https://images.unsplash.com/photo-1556229174-5e42a09e45af?w=400", stock: 45, promo: true },
-  { id: 3, name: "Suero Fisiológico 100ml", scientific_name: "Cloruro de Sodio", price: 4.50, description: "Ideal para limpieza nasal y heridas.", category: "Primeros Auxilios", image: "https://images.unsplash.com/photo-1584622650111-993a426fbf0a?w=400", stock: 200 },
-  { id: 4, name: "Huggies Premium Care G", price: 55.90, description: "Pañales con canales de aire para piel seca.", category: "Bebés", image: "https://images.unsplash.com/photo-1544126592-807daa2b5650?w=400", stock: 30, promo: true },
-  { id: 5, name: "Jabón Neutro Glicerina", price: 12.00, description: "Hipoalergénico para toda la familia.", category: "Higiene", image: "https://images.unsplash.com/photo-1559056199-641a0ac8b55e?w=400", stock: 80 },
-  { id: 6, name: "Vitamina C 1000mg", scientific_name: "Ácido Ascórbico", price: 45.00, description: "Refuerza tu sistema inmunológico.", category: "Medicamentos", image: "https://images.unsplash.com/photo-1616671285435-08e178047990?w=400", stock: 120, promo: true }
+const parseValue = (node: Element): any => {
+  const child = node.firstElementChild;
+  if (!child) return node.textContent;
+  switch (child.tagName.toLowerCase()) {
+    case 'string': return child.textContent;
+    case 'int':
+    case 'i4': return parseInt(child.textContent || '0', 10);
+    case 'double': return parseFloat(child.textContent || '0');
+    case 'boolean': return child.textContent === '1';
+    case 'datetime.iso8601': return new Date(child.textContent || '');
+    case 'array': return Array.from(child.querySelector('data')?.children || []).map(parseValue);
+    case 'struct':
+      const obj: any = {};
+      Array.from(child.children).forEach(m => {
+        const n = m.querySelector('name');
+        const v = m.querySelector('value');
+        if (n && v) obj[n.textContent || ''] = parseValue(v);
+      });
+      return obj;
+    case 'nil': return null;
+    default: return child.textContent;
+  }
+};
+
+const PROXIES = [
+  (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+  (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
 ];
 
-const PROMO_BANNERS = [
-  { id: 1, title: "Cuidado Facial Premium", sub: "Hasta 40% OFF", img: "https://images.unsplash.com/photo-1556228720-195a672e8a03?q=80&w=1200", color: "from-blue-600/40" },
-  { id: 2, title: "Kit de Vitaminas GIO+", sub: "Nuevos Ingresos", img: "https://images.unsplash.com/photo-1550573104-4eb6278a3cce?q=80&w=1200", color: "from-[#e6007e]/40" },
-  { id: 3, title: "Mamá y Bebé", sub: "Cuidados Especiales", img: "https://images.unsplash.com/photo-1519689680058-324335c77eba?q=80&w=1200", color: "from-green-600/40" },
-  { id: 4, title: "Bienestar Digestivo", sub: "Lo Mejor para Ti", img: "https://images.unsplash.com/photo-1540348563403-194098939630?q=80&w=1200", color: "from-amber-600/40" }
-];
+class OdooClient {
+  constructor(private url: string, private db: string, private onLog?: (msg: string) => void) {
+    this.url = this.url.replace(/\/+$/, '');
+  }
 
-const WEB_CATEGORIES = ["Todos", "Medicamentos", "Cuidado de Piel", "Bebés", "Higiene", "Primeros Auxilios"];
+  async rpcCall(endpoint: string, method: string, params: any[]) {
+    const xml = `<?xml version="1.0"?><methodCall><methodName>${method}</methodName><params>${params.map(p => `<param>${serialize(p)}</param>`).join('')}</params></methodCall>`;
+    const baseUrl = `${this.url}/xmlrpc/2/${endpoint}`;
+    
+    let lastError = "";
+    for (const proxyFn of PROXIES) {
+      try {
+        const targetUrl = proxyFn(baseUrl);
+        const response = await fetch(targetUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/xml' },
+          body: xml,
+          signal: AbortSignal.timeout(20000)
+        });
+        if (!response.ok) {
+          lastError = `HTTP ${response.status}`;
+          continue;
+        }
+        const text = await response.text();
+        const doc = new DOMParser().parseFromString(text, 'text/xml');
+        const fault = doc.querySelector('fault value');
+        if (fault) {
+          const faultData = parseValue(fault);
+          throw new Error(faultData.faultString || 'Odoo Error');
+        }
+        const resultNode = doc.querySelector('params param value');
+        return resultNode ? parseValue(resultNode) : null;
+      } catch (e: any) { 
+        lastError = e.message;
+        if (this.onLog) this.onLog(`Log: ${e.message}`);
+      }
+    }
+    throw new Error(lastError);
+  }
+}
 
-// --- UI Components ---
+// --- CONSTANTES ---
+const ADMIN_PASS = "admin123";
+const DEFAULT_CONFIG = {
+  url: "https://baltodano.facturaclic.pe",
+  db: "baltodano_master",
+  user: "luis@gaorsystem.com",
+  apiKey: "8d06549a109c1c0f8847610a9f8d68250de8bd39",
+  whatsapp: "51921312386",
+  yape: "921312386",
+  companyName: "GIOFARMA",
+  hiddenProducts: [],
+  hiddenCategories: [],
+  banners: [
+    { 
+      img: "https://images.unsplash.com/photo-1576091160550-2173dba999ef?auto=format&fit=crop&w=1200&q=80", 
+      title: "Salud en cada paso", 
+      desc: "Los mejores precios del mercado sincronizados con Odoo." 
+    },
+    { 
+      img: "https://images.unsplash.com/photo-1587854692152-cbe660dbbb88?auto=format&fit=crop&w=1200&q=80", 
+      title: "Cuidado Personal", 
+      desc: "Todo lo que necesitas para tu bienestar diario." 
+    }
+  ]
+};
 
-const Logo = ({ inverted = false, size = "md", onClick }: { inverted?: boolean, size?: "sm" | "md" | "lg", onClick?: () => void }) => {
-  const sizes = {
-    sm: { circle: "w-8 h-8", text: "text-lg", sub: "text-[5px]", icon: 16 },
-    md: { circle: "w-10 h-10", text: "text-2xl", sub: "text-[6px]", icon: 20 },
-    lg: { circle: "w-16 h-16", text: "text-5xl", sub: "text-[10px]", icon: 32 }
+// --- COMPONENTES UI ---
+
+const PharmaLogo = ({ config, onAdminRequest }: { config: any, onAdminRequest: () => void }) => {
+  const [clicks, setClicks] = useState(0);
+  const timerRef = useRef<any>(null);
+
+  const handleClick = () => {
+    const newClicks = clicks + 1;
+    setClicks(newClicks);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setClicks(0), 1000);
+
+    if (newClicks >= 3) {
+      setClicks(0);
+      onAdminRequest();
+    }
   };
-  const current = sizes[size];
-  const textColor = inverted ? "text-white" : "text-[#e6007e]";
-  const circleColor = inverted ? "border-white" : "border-[#e6007e]";
+
+  const name = config.companyName || "GIOFARMA";
+  const part1 = name.substring(0, Math.ceil(name.length/2));
+  const part2 = name.substring(Math.ceil(name.length/2));
 
   return (
-    <div onClick={(e) => { e.stopPropagation(); if(onClick) onClick(); }} className={`flex items-center gap-3 ${textColor} select-none cursor-pointer group`}>
-      <div className={`${current.circle} border-2 ${circleColor} rounded-2xl flex items-center justify-center shrink-0 transition-all duration-500 group-hover:rotate-[15deg] group-hover:bg-[#e6007e] group-hover:text-white group-hover:shadow-2xl`}>
-         <Stethoscope size={current.icon} strokeWidth={2.5} />
+    <div onClick={handleClick} className="flex items-center gap-3 cursor-pointer group select-none transition-transform active:scale-95">
+      <div className="w-10 h-10 md:w-12 md:h-12 rounded-2xl flex items-center justify-center bg-[#e6007e] text-white shadow-xl group-hover:scale-105 transition-all">
+        <HeartPulse size={28} />
       </div>
-      <div className="flex flex-col leading-none">
-        <div className="flex items-center font-black tracking-tighter">
-          <span>GIO</span>
-          <span className="text-[#8cc63f] mx-1">+</span>
-          <span>FARMA</span>
-        </div>
-        <p className={`font-bold ${current.sub} uppercase tracking-[0.2em] opacity-50 mt-1`}>La farmacia del futuro</p>
+      <div className="flex flex-col -space-y-1">
+        <span className="text-xl md:text-2xl font-black tracking-tighter text-slate-900 uppercase">{part1}<span className="text-[#8cc63f]">{part2}</span></span>
+        <span className="text-[8px] md:text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">Portal Autopedido</span>
       </div>
     </div>
   );
 };
 
-const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, loading = false }: any) => {
-  const variants: any = {
-    primary: "bg-[#e6007e] text-white hover:bg-[#c90078] shadow-lg shadow-pink-100 btn-glow",
-    outline: "bg-white text-slate-900 border border-slate-200 hover:border-[#e6007e] hover:text-[#e6007e]",
-    dark: "bg-slate-950 text-white hover:bg-slate-900 shadow-2xl",
-    success: "bg-[#8cc63f] text-white shadow-lg"
-  };
+const BannerCarousel = ({ config, compact = false }: { config: any, compact?: boolean }) => {
+  const banners = config.banners || DEFAULT_CONFIG.banners;
+  const [curr, setCurr] = useState(0);
+
+  useEffect(() => {
+    if (banners.length <= 1) return;
+    const it = setInterval(() => setCurr(c => (c + 1) % banners.length), 5000);
+    return () => clearInterval(it);
+  }, [banners.length]);
+
+  if (banners.length === 0) return null;
+
   return (
-    <button disabled={disabled || loading} onClick={onClick} className={`px-10 py-5 rounded-[2rem] font-bold transition-all flex items-center justify-center gap-3 active:scale-95 text-sm tracking-wide ${variants[variant]} ${className}`}>
-      {loading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : children}
-    </button>
+    <div className={`relative w-full overflow-hidden rounded-[3.5rem] shadow-2xl animate-scale-in ${compact ? 'h-[250px] md:h-[400px]' : 'h-[350px] md:h-[550px]'}`}>
+      {banners.map((b: any, i: number) => (
+        <div key={i} className={`absolute inset-0 transition-all duration-1000 ${i === curr ? 'opacity-100 scale-100' : 'opacity-0 scale-105'}`}>
+          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent z-10" />
+          <img src={b.img} className="w-full h-full object-cover" alt={b.title} />
+          <div className={`absolute left-8 md:left-12 z-20 max-w-xl space-y-4 ${compact ? 'bottom-8' : 'bottom-12'}`}>
+            <h2 className={`font-black text-white italic uppercase leading-[0.9] tracking-tighter ${compact ? 'text-3xl md:text-5xl' : 'text-4xl md:text-7xl'}`}>{b.title}</h2>
+            <p className={`text-white/90 font-medium uppercase italic tracking-wide ${compact ? 'text-[10px] md:text-lg' : 'text-sm md:text-2xl'}`}>{b.desc}</p>
+          </div>
+        </div>
+      ))}
+      <div className="absolute bottom-6 right-8 z-30 flex gap-2.5">
+         {banners.map((_: any, i: number) => (
+           <div key={i} className={`h-2 rounded-full transition-all duration-500 ${i === curr ? 'w-10 bg-white shadow-lg' : 'w-3 bg-white/30'}`} />
+         ))}
+      </div>
+    </div>
   );
 };
+
+const CheckoutModal = ({ cart, config, onClose, onOrderSuccess }: any) => {
+  const [orderType, setOrderType] = useState<'delivery' | 'pickup'>('delivery');
+  const [userData, setUserData] = useState({ name: '', phone: '', address: '' });
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [numCopied, setNumCopied] = useState(false);
+
+  const total = cart.reduce((acc: number, item: any) => acc + (item.finalPrice * item.q), 0);
+
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(config.yape || "900000000");
+    setNumCopied(true);
+  };
+
+  const handleCreateOrder = async () => {
+    if (!userData.name || !userData.phone || (orderType === 'delivery' && !userData.address)) {
+      alert("Por favor completa los datos requeridos.");
+      return;
+    }
+    if (!numCopied) {
+      alert("Por favor copia el número de Yape para continuar.");
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const client = new OdooClient(config.url, config.db);
+      const uid = await client.rpcCall('common', 'authenticate', [config.db, config.user, config.apiKey, {}]);
+      if (!uid) throw new Error("Error de conexión con Odoo.");
+
+      const orderId = await client.rpcCall('object', 'execute_kw', [
+        config.db, uid, config.apiKey,
+        'sale.order', 'create',
+        [{
+          partner_id: 1, 
+          note: `Portal Autopedido: ${orderType.toUpperCase()} - Cliente: ${userData.name} (${userData.phone}) - Pago via YAPE confirmado. Dirección: ${userData.address || 'RECOJO EN TIENDA'}`
+        }]
+      ]);
+
+      for (const item of cart) {
+        await client.rpcCall('object', 'execute_kw', [
+          config.db, uid, config.apiKey,
+          'sale.order.line', 'create',
+          [{
+            order_id: orderId,
+            product_id: item.id,
+            product_uom_qty: item.q,
+            price_unit: item.finalPrice,
+            name: `${item.name} (${item.u || 'Unidad'})`
+          }]
+        ]);
+      }
+
+      const summary = cart.map((i: any) => `- ${i.q}x ${i.name} (${i.u}): S/ ${(i.finalPrice * i.q).toFixed(2)}`).join('%0A');
+      const waMsg = `*ORDEN ODOO: #${orderId}*%0A%0A*Cliente:* ${userData.name}%0A*Telf:* ${userData.phone}%0A*Tipo:* ${orderType === 'delivery' ? 'DELIVERY' : 'RECOJO EN TIENDA'}%0A${orderType === 'delivery' ? `*Dirección:* ${userData.address}%0A` : ''}%0A*ESTADO PAGO:* Ya copié el número de Yape y procederé a realizar el pago en breve.%0A%0A*DETALLE:*%0A${summary}%0A%0A*TOTAL A PAGAR: S/ ${total.toFixed(2)}*`;
+      window.open(`https://wa.me/${config.whatsapp}?text=${waMsg}`, '_blank');
+      onOrderSuccess();
+    } catch (e: any) { alert(`Error al procesar: ${e.message}`); } finally { setIsProcessing(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[700] flex items-center justify-center bg-slate-900/95 backdrop-blur-xl p-4 overflow-y-auto no-scrollbar">
+      <div className="bg-white w-full max-w-[480px] rounded-[3.5rem] p-8 md:p-10 space-y-8 animate-scale-in shadow-2xl">
+        <div className="flex gap-4">
+           <button onClick={() => setOrderType('delivery')} className={`flex-1 p-6 rounded-3xl border-2 flex flex-col items-center gap-2 transition-all ${orderType === 'delivery' ? 'bg-[#e6007e] border-[#e6007e] text-white shadow-lg scale-105' : 'border-slate-50 text-slate-300 hover:border-slate-100'}`}>
+              <Truck size={32}/> 
+              <span className="text-[10px] font-black uppercase tracking-widest">Domicilio</span>
+           </button>
+           <button onClick={() => setOrderType('pickup')} className={`flex-1 p-6 rounded-3xl border-2 flex flex-col items-center gap-2 transition-all ${orderType === 'pickup' ? 'bg-[#8cc63f] border-[#8cc63f] text-white shadow-lg scale-105' : 'border-slate-50 text-slate-300 hover:border-slate-100'}`}>
+              <Store size={32}/> 
+              <span className="text-[10px] font-black uppercase tracking-widest">Tienda</span>
+           </button>
+        </div>
+
+        <div className="space-y-4">
+           <div className="relative">
+              <input type="text" placeholder="Tu nombre completo" className="w-full pl-14 pr-6 py-5 bg-[#f8f9fb] rounded-2xl font-bold outline-none border-2 border-transparent focus:border-[#e6007e] transition-all text-sm" value={userData.name} onChange={e => setUserData({...userData, name: e.target.value})} />
+              <User size={18} className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300" />
+           </div>
+           <div className="relative">
+              <input type="tel" placeholder="Número de celular" className="w-full pl-14 pr-6 py-5 bg-[#f8f9fb] rounded-2xl font-bold outline-none border-2 border-transparent focus:border-[#e6007e] transition-all text-sm" value={userData.phone} onChange={e => setUserData({...userData, phone: e.target.value})} />
+              <Phone size={18} className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300" />
+           </div>
+           {orderType === 'delivery' && (
+             <div className="relative animate-fade-up">
+                <input type="text" placeholder="Dirección exacta de entrega" className="w-full pl-14 pr-6 py-5 bg-[#f8f9fb] rounded-2xl font-bold outline-none border-2 border-transparent focus:border-[#e6007e] transition-all text-sm" value={userData.address} onChange={e => setUserData({...userData, address: e.target.value})} />
+                <MapPin size={18} className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300" />
+             </div>
+           )}
+        </div>
+
+        <div className="p-6 bg-slate-50 rounded-[2rem] border border-slate-100 space-y-4">
+           <div className="flex items-center justify-between">
+              <div className="flex flex-col">
+                 <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Pagar con Yape</span>
+                 <span className="text-xl font-black text-slate-900 tracking-tight italic">{config.yape}</span>
+              </div>
+              <button onClick={copyToClipboard} className={`p-4 rounded-2xl transition-all flex items-center gap-2 ${numCopied ? 'bg-[#8cc63f] text-white' : 'bg-[#e6007e] text-white hover:scale-105 active:scale-95'}`}>
+                 {numCopied ? <Check size={18}/> : <Copy size={18}/>}
+                 <span className="text-[10px] font-black uppercase tracking-widest">{numCopied ? 'Copiado' : 'Copiar'}</span>
+              </button>
+           </div>
+           {!numCopied && <p className="text-[9px] text-[#e6007e] font-bold animate-pulse uppercase tracking-tighter">Debes copiar el número para habilitar el pedido</p>}
+        </div>
+
+        <div className="p-8 bg-slate-950 text-white rounded-[2.5rem] flex justify-between items-center shadow-inner relative overflow-hidden">
+           <div className="flex flex-col z-10">
+              <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/40">Total a pagar</span>
+              <span className="text-4xl font-black italic tracking-tighter text-[#8cc63f]">S/ {total.toFixed(2)}</span>
+           </div>
+           <div className="text-right z-10 flex flex-col">
+              <span className="text-[9px] font-bold text-white/60 uppercase">Sincronizado</span>
+              <span className="text-[9px] font-bold text-white/60 uppercase">con Odoo</span>
+           </div>
+        </div>
+
+        <button 
+          disabled={isProcessing || !numCopied} 
+          onClick={handleCreateOrder} 
+          className={`w-full py-7 rounded-[2rem] font-black uppercase tracking-[0.4em] text-sm shadow-2xl transition-all flex items-center justify-center gap-4 ${isProcessing ? 'bg-slate-200 text-slate-400' : (!numCopied ? 'bg-slate-100 text-slate-300' : 'bg-[#e6007e] text-white hover:brightness-110 active:scale-95')}`}
+        >
+          {isProcessing ? <RefreshCw className="animate-spin" size={20}/> : <Send size={20}/>}
+          {isProcessing ? 'Procesando...' : 'Enviar Pedido'}
+        </button>
+
+        <button onClick={onClose} className="w-full text-[10px] font-black uppercase text-slate-300 tracking-widest hover:text-red-400 transition-colors">Cancelar y Volver</button>
+      </div>
+    </div>
+  );
+};
+
+const ProductDetailModal = ({ product, onClose, onAdd }: any) => {
+  const [qty, setQty] = useState(1);
+  const [uom, setUom] = useState(product.prices?.[0]?.uom || 'Unidad');
+  const currentPrice = useMemo(() => product.prices?.find((p: any) => p.uom === uom)?.price || product.price, [uom, product]);
+
+  return (
+    <div className="fixed inset-0 z-[600] flex items-center justify-center bg-slate-900/90 backdrop-blur-xl p-4 overflow-hidden">
+      <div className="absolute inset-0" onClick={onClose}></div>
+      <div className="relative w-full max-w-6xl bg-white md:rounded-[4rem] overflow-hidden shadow-2xl flex flex-col md:flex-row max-h-[92vh] animate-scale-in">
+        <button onClick={onClose} className="absolute top-6 right-6 z-[610] p-4 bg-slate-100 rounded-full text-slate-400 hover:bg-[#e6007e] hover:text-white transition-all shadow-sm"><X size={26}/></button>
+        
+        {/* LADO IZQUIERDO: IMAGEN MAXIMIZADA */}
+        <div className="w-full md:w-[58%] bg-[#fcfcfd] p-8 flex flex-col items-stretch border-b md:border-b-0 md:border-r border-slate-100 overflow-hidden">
+           <div className="flex-1 min-h-[400px] max-h-[550px] flex items-center justify-center bg-white rounded-[3.5rem] p-6 shadow-sm border border-slate-50 overflow-hidden">
+             {product.image ? (
+               <img src={product.image} className="max-h-full max-w-full object-contain hover:scale-105 transition-transform duration-700" alt={product.name}/>
+             ) : (
+               <Package size={160} className="text-slate-100 opacity-20"/>
+             )}
+           </div>
+
+           <div className="mt-8 space-y-4 px-2">
+              <div className="flex items-center gap-3 text-[#e6007e]">
+                <Info size={16} />
+                <h3 className="text-[10px] font-black uppercase tracking-widest">Información y Ficha Técnica</h3>
+              </div>
+              <div className="p-6 bg-white rounded-3xl border border-slate-100 max-h-40 overflow-y-auto no-scrollbar shadow-inner">
+                <p className="text-[14px] text-slate-500 font-medium leading-relaxed italic">
+                  {product.description || "Este producto está verificado por nuestro departamento farmacéutico. Sincronizado en tiempo real desde el maestro de Odoo para garantizar disponibilidad inmediata."}
+                </p>
+              </div>
+           </div>
+        </div>
+
+        {/* LADO DERECHO: INFO COMERCIAL REEQUILIBRADA */}
+        <div className="w-full md:w-[42%] p-10 md:p-14 flex flex-col justify-center bg-white">
+           <div className="space-y-12">
+              <div className="space-y-4">
+                 <span className="px-5 py-2 bg-[#e6007e]/5 text-[#e6007e] rounded-xl text-[10px] font-black uppercase tracking-widest">{product.category}</span>
+                 <h2 className="text-2xl md:text-3xl font-black text-slate-900 uppercase italic leading-tight tracking-tight">
+                    {product.name}
+                 </h2>
+              </div>
+
+              <div className="py-10 border-y border-slate-100 space-y-2">
+                 <div className="flex items-center gap-3 text-slate-300 font-bold">
+                    <span className="text-[10px] uppercase tracking-widest">Precio Normal:</span>
+                    <span className="text-xl line-through decoration-slate-200">S/ {(currentPrice * 1.15).toFixed(2)}</span>
+                 </div>
+                 <div className="flex items-baseline justify-between">
+                    <span className="text-6xl font-black text-slate-900 tracking-tighter italic leading-none">S/ {currentPrice.toFixed(2)}</span>
+                    <span className="text-xl font-black text-[#8cc63f] italic uppercase tracking-widest">Web</span>
+                 </div>
+              </div>
+
+              {/* Presentaciones (UOM) Restauradas */}
+              <div className="space-y-5">
+                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest italic flex items-center gap-2">
+                    <Layers size={16}/> Presentación Disponible
+                 </span>
+                 <div className="flex flex-wrap gap-3">
+                    {product.prices?.map((p: any) => (
+                      <button key={p.uom} onClick={() => setUom(p.uom)} className={`px-6 py-4 rounded-2xl border-2 transition-all font-black uppercase text-[10px] tracking-widest flex-1 min-w-[120px] text-center ${uom === p.uom ? 'border-[#e6007e] bg-[#e6007e]/5 text-[#e6007e] shadow-lg' : 'border-slate-100 text-slate-300 hover:border-slate-200'}`}>
+                        {p.uom}
+                      </button>
+                    ))}
+                 </div>
+              </div>
+
+              {/* Cantidad y Botón de Compra */}
+              <div className="flex gap-4 pt-6">
+                 <div className="flex items-center justify-between bg-slate-50 px-6 py-5 rounded-[2rem] min-w-[150px] border border-slate-100 shadow-inner">
+                    <button onClick={() => setQty(Math.max(1, qty - 1))} className="text-slate-400 hover:text-[#e6007e] transition-colors"><Minus size={22}/></button>
+                    <span className="text-3xl font-black italic text-slate-900">{qty}</span>
+                    <button onClick={() => setQty(qty + 1)} className="text-slate-400 hover:text-[#e6007e] transition-colors"><Plus size={22}/></button>
+                 </div>
+                 <button onClick={() => { onAdd(product, qty, uom, currentPrice); onClose(); }} className="flex-1 bg-[#e6007e] text-white rounded-[2rem] font-black uppercase tracking-[0.3em] shadow-xl hover:brightness-110 active:scale-95 transition-all text-[11px] py-6">
+                   Agregar al Carrito
+                 </button>
+              </div>
+           </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- APP PRINCIPAL ---
 
 const App = () => {
-  const [view, setView] = useState<'welcome' | 'menu' | 'checkout' | 'success' | 'admin_dashboard'>(() => {
-    const isAdmin = localStorage.getItem('giofarma_admin_active') === 'true';
-    return isAdmin ? 'admin_dashboard' : 'welcome';
-  });
-  const [isAdminMode, setIsAdminMode] = useState(() => localStorage.getItem('giofarma_admin_active') === 'true');
-  const [cart, setCart] = useState<CartItem[]>([]);
-  const [activeCategory, setActiveCategory] = useState("Todos");
+  const [view, setView] = useState<'home' | 'shop' | 'admin'>('home');
+  const [adminTab, setAdminTab] = useState<'status' | 'catalog' | 'banners' | 'config'>('status');
+  const [adminAuth, setAdminAuth] = useState(false);
+  const [adminPassInput, setAdminPassInput] = useState("");
+  const [cart, setCart] = useState<any[]>([]);
+  const [products, setProducts] = useState<any[]>([]);
+  const [allCategories, setAllCategories] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [isCartOpen, setIsCartOpen] = useState(false);
-  const [isAiOpen, setIsAiOpen] = useState(false);
-  const [aiMessage, setAiMessage] = useState("");
-  const [aiResponse, setAiResponse] = useState("");
-  const [isAiLoading, setIsAiLoading] = useState(false);
-  const [showPassModal, setShowPassModal] = useState(false);
-  const [passInput, setPassInput] = useState("");
-  
-  const [products] = useState<Product[]>(INITIAL_PRODUCTS);
-  const promoSliderRef = useRef<HTMLDivElement>(null);
+  const [activeCategory, setActiveCategory] = useState("Todos");
+  const [selectedProduct, setSelectedProduct] = useState<any>(null);
+  const [syncLogs, setSyncLogs] = useState<string[]>([]);
+  const [showCategorySelect, setShowCategorySelect] = useState(false);
+  const [showCheckout, setShowCheckout] = useState(false);
 
-  // Lógica de Scroll Automático para Banners
-  useEffect(() => {
-    if (view !== 'menu') return;
-    
-    const interval = setInterval(() => {
-      if (promoSliderRef.current) {
-        const slider = promoSliderRef.current;
-        const maxScroll = slider.scrollWidth - slider.clientWidth;
-        if (slider.scrollLeft >= maxScroll - 10) {
-          slider.scrollTo({ left: 0, behavior: 'smooth' });
-        } else {
-          slider.scrollBy({ left: slider.clientWidth / 2, behavior: 'smooth' });
-        }
-      }
-    }, 5000);
+  const [config, setConfig] = useState(() => {
+    const saved = localStorage.getItem('giofarma_config_v21');
+    return saved ? { ...DEFAULT_CONFIG, ...JSON.parse(saved) } : DEFAULT_CONFIG;
+  });
 
-    return () => clearInterval(interval);
-  }, [view]);
+  const hiddenProducts = useMemo(() => new Set<number>(config.hiddenProducts || []), [config.hiddenProducts]);
+  const hiddenCategories = useMemo(() => new Set<string>(config.hiddenCategories || []), [config.hiddenCategories]);
 
-  const scrollSlider = (direction: 'left' | 'right') => {
-    if (promoSliderRef.current) {
-      const amount = promoSliderRef.current.clientWidth / 1.5;
-      promoSliderRef.current.scrollBy({ left: direction === 'left' ? -amount : amount, behavior: 'smooth' });
-    }
+  const addLog = (msg: string) => setSyncLogs(p => [new Date().toLocaleTimeString() + ": " + msg, ...p].slice(0, 30));
+
+  const saveConfig = (newConfig: any) => {
+    setConfig(newConfig);
+    localStorage.setItem('giofarma_config_v21', JSON.stringify(newConfig));
   };
 
-  const handleLogoClick = () => {
-    if (isAdminMode) { setView('admin_dashboard'); return; }
-    setShowPassModal(true);
-  };
-
-  const handleVerifyPass = () => {
-    if (passInput === "admin123") {
-      setIsAdminMode(true);
-      setShowPassModal(false);
-      setPassInput("");
-      localStorage.setItem('giofarma_admin_active', 'true');
-      setView('admin_dashboard');
-    } else {
-      alert("Acceso denegado: PIN Incorrecto");
-    }
-  };
-
-  const filteredProducts = useMemo(() => {
-    return products.filter(p => {
-      const matchesCategory = activeCategory === "Todos" || p.category === activeCategory;
-      const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchesCategory && matchesSearch;
-    });
-  }, [activeCategory, searchQuery, products]);
-
-  const addToCart = (product: Product) => {
-    setCart(prev => {
-      const existing = prev.find(item => item.id === product.id);
-      if (existing) return prev.map(item => item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item);
-      return [...prev, { ...product, quantity: 1 }];
-    });
-    setIsCartOpen(true);
-  };
-
-  const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-
-  const handleAiAsk = async () => {
-    if (!aiMessage.trim()) return;
-    setIsAiLoading(true);
-    setAiResponse("");
+  const syncERP = useCallback(async (isSilent = false) => {
+    if (!config.apiKey || !config.url || !config.db) return;
+    if (!isSilent) setLoading(true);
+    addLog("Accediendo a Odoo RPC...");
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const prompt = `Como asesor farmacéutico de GIO+FARMA, responde profesionalmente a: "${aiMessage}". Sé empático y claro.`;
-      const response = await ai.models.generateContent({ model: 'gemini-3-flash-preview', contents: prompt });
-      setAiResponse(response.text || "Lo siento, ¿puedes repetir?");
-    } catch (err) {
-      setAiResponse("Disculpa, el asesor no está disponible ahora.");
-    } finally {
-      setIsAiLoading(false);
-    }
+      const client = new OdooClient(config.url, config.db, addLog);
+      const uid = await client.rpcCall('common', 'authenticate', [config.db, config.user, config.apiKey, {}]);
+      if (!uid) throw new Error("Acceso denegado.");
+      
+      const rawProducts = await client.rpcCall('object', 'execute_kw', [config.db, uid, config.apiKey, 'product.product', 'search_read', [[['sale_ok', '=', true]]], { fields: ['name', 'list_price', 'qty_available', 'categ_id', 'image_128', 'default_code', 'display_name', 'product_tmpl_id', 'description_sale'], limit: 1000 }]);
+      const rawPrices = await client.rpcCall('object', 'execute_kw', [config.db, uid, config.apiKey, 'product.pricelist.item', 'search_read', [[['fixed_price', '>', 0]]], { fields: ['product_id', 'product_tmpl_id', 'fixed_price', 'min_quantity', 'display_name', 'uom_id'], limit: 3000 }]);
+
+      if (Array.isArray(rawProducts)) {
+          const mapped = rawProducts.map((p: any) => {
+            const productName = p.display_name || p.name;
+            const rules = (rawPrices || []).filter((r: any) => (r.product_id && r.product_id[0] === p.id) || (r.product_tmpl_id && r.product_tmpl_id[0] === p.product_tmpl_id?.[0]));
+            let finalPrices = rules.length > 0 ? rules.map((r: any) => ({ price: r.fixed_price, uom: (r.uom_id && Array.isArray(r.uom_id)) ? r.uom_id[1] : 'Unidad' })) : [{ price: p.list_price || 0, uom: 'Unidad' }];
+            return { id: p.id, name: productName, price: p.list_price || 0, stock: p.qty_available || 0, description: p.description_sale || '', category: Array.isArray(p.categ_id) ? p.categ_id[1] : 'FARMACIA', prices: finalPrices, image: p.image_128 ? `data:image/png;base64,${p.image_128}` : null };
+          });
+          setProducts(mapped);
+          setAllCategories(Array.from(new Set(mapped.map(p => p.category))).sort());
+          addLog("Sincronización Odoo completada.");
+      }
+    } catch (e: any) { addLog(`Odoo Error: ${e.message}`); } finally { if (!isSilent) setLoading(false); }
+  }, [config]);
+
+  useEffect(() => { syncERP(); }, [syncERP]);
+
+  const filteredProducts = useMemo(() => products.filter(p => !hiddenProducts.has(p.id) && !hiddenCategories.has(p.category) && (activeCategory === "Todos" || p.category === activeCategory) && (p.name.toLowerCase().includes(searchQuery.toLowerCase()))).sort((a,b) => b.stock - a.stock), [products, searchQuery, activeCategory, hiddenProducts, hiddenCategories]);
+
+  // --- HANDLERS ADMIN ---
+  const updateBanners = (idx: number, field: string, value: string) => {
+    const newBanners = [...config.banners];
+    newBanners[idx] = { ...newBanners[idx], [field]: value };
+    saveConfig({ ...config, banners: newBanners });
   };
 
-  // --- RENDERING ADMIN DASHBOARD ---
-  if (view === 'admin_dashboard' && isAdminMode) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex overflow-hidden font-sans animate-fade-up">
-        <aside className="w-80 bg-slate-900 text-white flex flex-col shrink-0 border-r border-slate-800">
-          <div className="p-10 border-b border-slate-800 flex justify-between items-center">
-            <Logo inverted size="sm" />
-          </div>
-          <nav className="flex-1 p-8 space-y-4">
-            <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-4">Operaciones ERP</div>
-            <button className="w-full flex items-center gap-4 px-6 py-4 rounded-2xl bg-[#e6007e] text-white shadow-xl shadow-pink-900/20 font-bold transition-all">
-              <Package size={18} /> Inventario
-            </button>
-            <button className="w-full flex items-center gap-4 px-6 py-4 rounded-2xl text-slate-400 hover:bg-slate-800 font-bold transition-all">
-              <TrendingUp size={18} /> Ventas & POS
-            </button>
-            <button className="w-full flex items-center gap-4 px-6 py-4 rounded-2xl text-slate-400 hover:bg-slate-800 font-bold transition-all">
-               <Activity size={18} /> Logs de IA
-            </button>
-            <div className="pt-8 text-[10px] font-black text-slate-500 uppercase tracking-widest px-4">Configuración</div>
-            <button className="w-full flex items-center gap-4 px-6 py-4 rounded-2xl text-slate-400 hover:bg-slate-800 font-bold transition-all">
-               <User size={18} /> Usuarios
-            </button>
-          </nav>
-          <div className="p-8 border-t border-slate-800">
-             <button onClick={() => { setIsAdminMode(false); localStorage.removeItem('giofarma_admin_active'); setView('welcome'); }} className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-2xl bg-red-500/10 text-red-400 font-bold hover:bg-red-500/20 transition-all">
-                <LogOut size={18} /> Salir del Sistema
-             </button>
-          </div>
-        </aside>
-        <main className="flex-1 overflow-y-auto p-12 space-y-12 bg-[#fcfcfc]">
-           <header className="flex justify-between items-center">
-              <div>
-                <h1 className="text-5xl font-black tracking-tighter text-slate-900">Dashboard de Control</h1>
-                <p className="text-slate-400 font-medium">GIO+ FARMA v2.5 - Nodo Principal</p>
-              </div>
-              <div className="flex gap-4">
-                 <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm flex items-center gap-4">
-                    <div className="w-12 h-12 bg-green-100 text-green-600 rounded-2xl flex items-center justify-center"><DollarSign size={24}/></div>
-                    <div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Ventas Hoy</p><p className="text-xl font-black text-slate-900">S/ 4,200.00</p></div>
-                 </div>
-                 <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm flex items-center gap-4">
-                    <div className="w-12 h-12 bg-[#e6007e]/10 text-[#e6007e] rounded-2xl flex items-center justify-center"><BarChart3 size={24}/></div>
-                    <div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Visitantes</p><p className="text-xl font-black text-slate-900">1,245</p></div>
-                 </div>
-              </div>
-           </header>
+  const addBanner = () => {
+    saveConfig({ ...config, banners: [...config.banners, { img: '', title: 'Nuevo Banner', desc: 'Descripción aquí' }] });
+  };
 
-           <div className="grid grid-cols-1 gap-8">
-              <div className="bg-white rounded-[3rem] border border-slate-100 shadow-xl overflow-hidden">
-                 <div className="p-8 border-b flex justify-between items-center">
-                    <h3 className="font-black text-xl">Estado de Inventario</h3>
-                    <button className="text-xs font-bold text-[#e6007e] uppercase tracking-widest">Ver Todo</button>
-                 </div>
-                 <table className="w-full text-left">
-                    <thead className="bg-slate-50/50">
-                       <tr>
-                          <th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest">Producto</th>
-                          <th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest">Stock</th>
-                          <th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest">Precio</th>
-                          <th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest">Salud de Stock</th>
-                       </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                       {products.map(p => (
-                         <tr key={p.id} className="hover:bg-slate-50 transition-colors">
-                            <td className="px-8 py-5 font-bold text-slate-800">{p.name}</td>
-                            <td className="px-8 py-5 font-black">{p.stock} u.</td>
-                            <td className="px-8 py-5">S/ {p.price.toFixed(2)}</td>
-                            <td className="px-8 py-5">
-                               <div className="w-full bg-slate-100 h-2 rounded-full max-w-[100px] overflow-hidden">
-                                  <div className="bg-[#8cc63f] h-full" style={{ width: `${Math.min(100, p.stock/2)}%` }}></div>
-                               </div>
-                            </td>
-                         </tr>
-                       ))}
-                    </tbody>
-                 </table>
+  const removeBanner = (idx: number) => {
+    saveConfig({ ...config, banners: config.banners.filter((_: any, i: number) => i !== idx) });
+  };
+
+  if (view === 'home') {
+    return (
+      <div className="min-h-screen bg-white">
+        <header className="h-28 px-10 md:px-24 flex items-center justify-between sticky top-0 bg-white/95 backdrop-blur-md z-50 border-b border-slate-50">
+          <PharmaLogo config={config} onAdminRequest={() => setView('admin')} />
+          <button onClick={() => setView('shop')} className="px-12 py-5 bg-slate-950 text-white rounded-[1.8rem] font-black uppercase tracking-[0.3em] text-[10px] shadow-xl hover:scale-105 active:scale-95 transition-all flex items-center gap-3">
+            <ShoppingBag size={20} className="text-[#e6007e]"/> Pedido Online
+          </button>
+        </header>
+
+        <main className="p-10 md:p-24 space-y-32 max-w-[1800px] mx-auto overflow-hidden">
+           <div className="text-center space-y-8 animate-fade-up">
+              <h1 className="text-6xl md:text-[11rem] font-black text-slate-900 tracking-tighter leading-[0.8] italic uppercase">Tu salud no <br/><span className="text-[#e6007e]">puede esperar.</span></h1>
+              <div className="flex items-center justify-center gap-4">
+                 <div className="h-px w-20 bg-[#8cc63f]"></div>
+                 <p className="text-slate-400 font-bold uppercase tracking-[0.5em] text-sm md:text-xl italic">Bienestar Inmediato • Garantía Odoo</p>
+                 <div className="h-px w-20 bg-[#8cc63f]"></div>
               </div>
            </div>
-        </main>
-      </div>
-    );
-  }
 
-  // --- RENDERING WELCOME VIEW ---
-  if (view === 'welcome') {
-    return (
-      <div className="min-h-screen relative flex flex-col bg-white overflow-hidden">
-        <div className="blob blob-1"></div>
-        <div className="blob blob-2"></div>
-        <header className="fixed top-0 left-0 right-0 z-[100] px-6 py-6 lg:px-12 glass-nav">
-          <div className="max-w-7xl mx-auto flex justify-between items-center">
-            <Logo size="md" onClick={handleLogoClick} />
-            <div className="flex items-center gap-4">
-              <button className="hidden sm:flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-400">
-                <ShieldCheck size={16} className="text-[#8cc63f]" /> Boutique Certificada
-              </button>
-              {isAdminMode && (
-                <button onClick={() => setView('admin_dashboard')} className="p-3 bg-slate-900 text-white rounded-2xl shadow-xl animate-scale-in">
-                  <LayoutDashboard size={20} />
-                </button>
-              )}
-            </div>
-          </div>
-        </header>
-        <main className="flex-1 flex flex-col items-center justify-center pt-32 pb-12 px-6">
-          <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-16 items-center w-full">
-            <div className="text-center lg:text-left space-y-8 order-2 lg:order-1">
-              <div className="inline-flex items-center gap-3 px-6 py-2 bg-slate-100 rounded-full animate-fade-up stagger-1">
-                <Activity size={16} className="text-[#e6007e]" />
-                <span className="text-[10px] font-black uppercase tracking-[0.2em]">Salud Digital Premium</span>
-              </div>
-              <h1 className="text-5xl md:text-7xl lg:text-8xl font-black text-slate-900 tracking-tighter leading-[0.9] animate-fade-up stagger-2">
-                Bienvenido al <br /> <span className="text-[#e6007e]">bienestar.</span>
-              </h1>
-              <p className="text-lg lg:text-xl text-slate-500 font-medium max-w-lg mx-auto lg:mx-0 animate-fade-up stagger-3">
-                Redefiniendo la farmacia con elegancia, tecnología y una red de entrega ultra-veloz.
-              </p>
-              <div className="flex flex-col sm:flex-row gap-4 pt-4 animate-fade-up stagger-3">
-                <Button onClick={() => setView('menu')} className="w-full sm:w-fit text-lg py-7">Explorar Catálogo <ArrowRight size={22} /></Button>
-              </div>
-            </div>
-            <div className="relative order-1 lg:order-2 flex justify-center animate-scale-in">
-              <div className="relative w-full max-w-[500px]">
-                <div className="aspect-[4/5] rounded-[4rem] overflow-hidden premium-shadow transform rotate-1 hover:rotate-0 transition-all duration-700 border-8 border-white">
-                  <img src="https://images.unsplash.com/photo-1512678080530-7760d81faba6?q=80&w=1200" className="w-full h-full object-cover scale-110 hover:scale-100 transition-all duration-1000" />
-                </div>
-                <div className="absolute -bottom-10 -right-4 lg:-right-12 bg-white p-8 rounded-[3rem] shadow-2xl border border-slate-50">
-                   <div className="flex items-center gap-5">
-                      <div className="w-16 h-16 bg-[#e6007e] rounded-[1.5rem] flex items-center justify-center text-white shadow-xl shadow-pink-100">
-                        <Clock size={32} />
-                      </div>
-                      <div className="text-left">
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Delivery GIO+</p>
-                        <p className="text-xl font-black text-slate-900 leading-tight">En 25 min</p>
-                      </div>
+           <BannerCarousel config={config} />
+
+           <div className="grid grid-cols-1 md:grid-cols-3 gap-12">
+              {[
+                { icon: <Zap size={32} className="text-yellow-500"/>, title: "Entrega Inmediata", desc: "Tus pedidos procesados al instante para tu máxima tranquilidad y salud." },
+                { icon: <ShieldCheck size={32} className="text-[#8cc63f]"/>, title: "Garantía Odoo", desc: "Sincronización real de stock y precios oficiales directamente de fábrica." },
+                { icon: <Clock size={32} className="text-blue-500"/>, title: "Soporte 24/7", desc: "Bienestar y atención continua para ti y toda tu familia en cualquier momento." }
+              ].map((f, i) => (
+                <div key={i} className="bg-white p-16 rounded-[4.5rem] border border-slate-100 flex flex-col items-center text-center space-y-8 hover:translate-y-[-10px] transition-all duration-500 group shadow-sm hover:shadow-2xl">
+                   <div className="w-20 h-20 bg-slate-50 rounded-3xl shadow-sm flex items-center justify-center group-hover:scale-110 transition-transform group-hover:bg-[#e6007e] group-hover:text-white">{f.icon}</div>
+                   <div className="space-y-4">
+                     <h3 className="text-3xl font-black text-slate-900 uppercase italic tracking-tighter">{f.title}</h3>
+                     <p className="text-slate-400 font-medium leading-relaxed text-lg">{f.desc}</p>
                    </div>
                 </div>
-              </div>
-            </div>
-          </div>
+              ))}
+           </div>
         </main>
       </div>
     );
   }
 
-  // --- CATALOG & STORE RENDERING ---
-  return (
-    <div className="min-h-screen flex flex-col bg-[#fcfcfc] pb-24 lg:pb-0 animate-fade-up">
-      {/* Header Unificado */}
-      <header className="sticky top-0 z-[100] glass-nav px-6 lg:px-12 py-5 flex items-center justify-between">
-         <Logo size="sm" onClick={handleLogoClick} />
-         <div className="hidden md:flex flex-1 max-w-xl mx-16 relative group">
-            <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-[#e6007e] transition-colors" size={18} />
-            <input 
-              type="text" 
-              placeholder="Buscar medicamentos o cuidado personal..." 
-              className="w-full pl-16 pr-8 py-4 bg-slate-100/50 rounded-2xl text-sm font-bold focus:bg-white focus:ring-2 focus:ring-[#e6007e]/10 transition-all outline-none border border-transparent focus:border-slate-100" 
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-            />
-         </div>
-         <div className="flex items-center gap-6">
-            <button onClick={() => setIsAiOpen(true)} className="hidden sm:flex items-center gap-3 px-6 py-3 bg-slate-950 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-2xl hover:bg-[#e6007e] transition-all">
-               <Sparkles size={16} className="text-[#8cc63f]"/> IA Asistente
-            </button>
-            <button onClick={() => setIsCartOpen(true)} className="relative p-3.5 text-slate-900 bg-white rounded-2xl shadow-sm border border-slate-100 hover:shadow-xl transition-all">
-               <ShoppingCart size={24} />
-               {cart.length > 0 && (
-                 <span className="absolute -top-1 -right-1 bg-[#e6007e] text-white text-[9px] font-black w-6 h-6 flex items-center justify-center rounded-full border-4 border-white shadow-lg animate-bounce">
-                   {cart.length}
-                 </span>
-               )}
-            </button>
-         </div>
-      </header>
-
-      {/* FLASH NEWS TICKER */}
-      <div className="bg-slate-950 overflow-hidden relative h-10 flex items-center border-y border-white/5">
-         <div className="flex whitespace-nowrap animate-marquee items-center gap-12">
-            {[
-              { icon: Zap, text: "OFERTA VIP: 2x1 EN PROTECTORES SOLARES SELECCIONADOS" },
-              { icon: Truck, text: "DELIVERY GRATUITO EN TODO LIMA METROPOLITANA POR ESTE MES" },
-              { icon: Activity, text: "NUEVA LÍNEA DE CUIDADO CAPIAL DERMATOLÓGICO DISPONIBLE" },
-              { icon: DoctorIcon, text: "CONSULTA CON NUESTRA IA ESPECIALISTA EN DERMATOLOGÍA 24/7" }
-            ].map((news, i) => (
-              <div key={i} className="flex items-center gap-4 text-white">
-                <news.icon size={12} className="text-[#8cc63f]" />
-                <span className="text-[9px] font-black uppercase tracking-[0.3em]">{news.text}</span>
-                <span className="w-1.5 h-1.5 rounded-full bg-slate-700"></span>
+  if (view === 'shop') {
+    return (
+      <div className="min-h-screen bg-[#f8f9fb]">
+        {selectedProduct && <ProductDetailModal product={selectedProduct} onClose={() => setSelectedProduct(null)} onAdd={(p: any, q: number, u: string, pr: number) => setCart([...cart, {...p, q, u, finalPrice: pr}])} />}
+        {showCheckout && <CheckoutModal cart={cart} config={config} onClose={() => setShowCheckout(false)} onOrderSuccess={() => {setCart([]); setShowCheckout(false); setView('home');}} />}
+        
+        <header className="bg-white sticky top-0 z-[200] px-10 md:px-24 py-8 border-b border-slate-100 shadow-sm space-y-6">
+           <div className="flex items-center justify-between">
+              <PharmaLogo config={config} onAdminRequest={() => setView('admin')} />
+              <button onClick={() => cart.length > 0 && setShowCheckout(true)} className="relative w-14 h-14 bg-slate-950 text-white rounded-2xl flex items-center justify-center shadow-xl hover:scale-110 active:scale-95 transition-all"><ShoppingCart size={24} />{cart.length > 0 && <span className="absolute -top-3 -right-3 w-8 h-8 bg-[#e6007e] text-white text-[11px] font-black rounded-full flex items-center justify-center border-4 border-white animate-bounce shadow-lg">{cart.length}</span>}</button>
+           </div>
+           <div className="flex flex-col md:flex-row gap-4">
+              <div className="flex-1 relative">
+                <input type="text" placeholder="Busca productos..." className="w-full pl-14 pr-6 py-5 bg-slate-50 border-2 border-transparent focus:border-[#e6007e] rounded-2xl font-bold outline-none" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+                <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300" size={20}/>
               </div>
-            ))}
-         </div>
+              <button onClick={() => setShowCategorySelect(!showCategorySelect)} className="px-8 py-5 bg-white border-2 border-slate-100 rounded-2xl font-black uppercase text-[10px] tracking-widest flex items-center gap-3">{activeCategory} <ChevronDown size={16}/></button>
+              {showCategorySelect && (
+                <div className="absolute top-full mt-2 bg-white shadow-2xl rounded-2xl p-4 z-[300] w-64 border border-slate-100">
+                  {["Todos", ...allCategories].map(cat => (
+                    <button key={cat} onClick={() => {setActiveCategory(cat); setShowCategorySelect(false);}} className="w-full text-left p-4 hover:bg-slate-50 rounded-xl font-bold uppercase text-[10px]">{cat}</button>
+                  ))}
+                </div>
+              )}
+           </div>
+        </header>
+
+        <main className="p-10 md:p-24 space-y-16">
+           <BannerCarousel config={config} compact={true} />
+           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-8">
+              {filteredProducts.map(p => (
+                <div key={p.id} onClick={() => setSelectedProduct(p)} className="bg-white p-6 rounded-[3rem] border border-slate-100 shadow-sm hover:shadow-2xl transition-all cursor-pointer group">
+                  <div className="aspect-square bg-white rounded-[2.5rem] p-4 mb-4 flex items-center justify-center border border-slate-50 overflow-hidden">
+                     {p.image ? <img src={p.image} className="h-full w-full object-contain group-hover:scale-110 transition-transform" /> : <Package size={40} className="text-slate-100"/>}
+                  </div>
+                  <h3 className="text-[13px] font-black text-slate-800 uppercase italic line-clamp-2 h-10 leading-tight">{p.name}</h3>
+                  <div className="mt-6 text-2xl font-black text-slate-900 italic tracking-tighter">S/ {p.price.toFixed(2)}</div>
+                </div>
+              ))}
+           </div>
+        </main>
       </div>
+    );
+  }
 
-      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
-         <aside className="lg:w-80 lg:border-r border-slate-100 bg-white shrink-0 overflow-x-auto lg:overflow-y-auto no-scrollbar scroll-smooth">
-            <div className="flex lg:flex-col p-4 lg:p-10 gap-3 lg:gap-2">
-               <p className="hidden lg:block text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] px-5 mb-5">Categorías</p>
-               {WEB_CATEGORIES.map(c => (
-                 <button 
-                   key={c} 
-                   onClick={() => setActiveCategory(c)} 
-                   className={`whitespace-nowrap px-8 lg:px-6 py-4 lg:py-5 rounded-2xl font-black text-sm transition-all flex items-center justify-between group shrink-0 ${activeCategory === c ? 'bg-[#e6007e] text-white shadow-xl shadow-pink-100' : 'text-slate-400 bg-slate-50 lg:bg-transparent hover:bg-slate-50'}`}
-                 >
-                   <span>{c}</span>
-                   <ChevronRight size={14} className={`hidden lg:block ${activeCategory === c ? 'opacity-100 translate-x-1' : 'opacity-0'} transition-all`} />
-                 </button>
-               ))}
-            </div>
-         </aside>
+  if (view === 'admin') {
+    if (!adminAuth) {
+      return (
+        <div className="min-h-screen bg-slate-950 flex items-center justify-center p-10">
+           <div className="w-full max-w-lg bg-white rounded-[4rem] p-16 shadow-2xl space-y-12 text-center animate-scale-in">
+              <PharmaLogo config={config} onAdminRequest={() => {}} />
+              <div className="space-y-4">
+                 <p className="text-[11px] font-black uppercase text-slate-400 tracking-[0.3em] italic">Ingrese Clave Maestro</p>
+                 <input type="password" title="Contraseña" className="w-full bg-slate-50 border-2 border-slate-100 rounded-3xl px-8 py-8 text-center text-6xl font-black outline-none focus:border-[#e6007e] focus:bg-white transition-all tracking-[0.5em]" placeholder="••••" onChange={e => setAdminPassInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && adminPassInput === ADMIN_PASS && setAdminAuth(true)} />
+              </div>
+              <button onClick={() => adminPassInput === ADMIN_PASS ? setAdminAuth(true) : alert("Acceso Denegado")} className="w-full py-8 bg-slate-950 text-white rounded-3xl font-black uppercase tracking-[0.5em] text-xs transition-all active:scale-95 shadow-2xl">Autenticar ERP</button>
+           </div>
+        </div>
+      );
+    }
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans">
+        <aside className="w-full md:w-80 bg-white border-r border-slate-100 p-10 flex flex-col gap-10 sticky top-0 h-screen overflow-y-auto no-scrollbar">
+           <PharmaLogo config={config} onAdminRequest={() => {}} />
+           <nav className="flex flex-col gap-3">
+              <button onClick={() => setAdminTab('status')} className={`flex items-center gap-3 px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all ${adminTab === 'status' ? 'bg-[#e6007e] text-white shadow-lg' : 'text-slate-400 hover:bg-slate-50'}`}><Activity size={20}/> Status</button>
+              <button onClick={() => setAdminTab('catalog')} className={`flex items-center gap-3 px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all ${adminTab === 'catalog' ? 'bg-[#e6007e] text-white shadow-lg' : 'text-slate-400 hover:bg-slate-50'}`}><Package size={20}/> Catálogo</button>
+              <button onClick={() => setAdminTab('banners')} className={`flex items-center gap-3 px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all ${adminTab === 'banners' ? 'bg-[#e6007e] text-white shadow-lg' : 'text-slate-400 hover:bg-slate-50'}`}><ImageIcon size={20}/> Banners</button>
+              <button onClick={() => setAdminTab('config')} className={`flex items-center gap-3 px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all ${adminTab === 'config' ? 'bg-[#e6007e] text-white shadow-lg' : 'text-slate-400 hover:bg-slate-50'}`}><Settings size={20}/> Ajustes</button>
+           </nav>
+           <button onClick={() => setView('home')} className="mt-auto p-5 bg-red-50 text-red-500 rounded-xl font-black uppercase text-[9px] hover:bg-red-500 hover:text-white transition-all">Cerrar Sesión</button>
+        </aside>
+        
+        <main className="flex-1 p-12 overflow-y-auto">
+           {adminTab === 'status' && (
+             <div className="space-y-10">
+                <div className="flex justify-between items-center">
+                   <h2 className="text-5xl font-black text-slate-900 uppercase italic tracking-tighter">Terminal Odoo</h2>
+                   <button onClick={() => syncERP()} className="p-6 bg-slate-950 text-white rounded-2xl hover:bg-[#e6007e] transition-all"><RefreshCw size={28} className={loading ? 'animate-spin' : ''}/></button>
+                </div>
+                <div className="bg-slate-900 rounded-[3rem] p-12 h-[500px] overflow-y-auto font-mono text-[13px] text-[#8cc63f] shadow-2xl no-scrollbar">
+                   {syncLogs.length > 0 ? syncLogs.map((log, i) => <p key={i} className="mb-2 opacity-80"><span className="opacity-30 mr-4">[{i+1}]</span> {log}</p>) : <p className="opacity-40 italic">Inicie sincronización para ver logs...</p>}
+                </div>
+             </div>
+           )}
 
-         <main className="flex-1 overflow-y-auto p-4 lg:p-12 no-scrollbar bg-[#fcfcfc]">
-            <div className="max-w-7xl mx-auto space-y-12">
-               
-               {/* PROMOTIONAL IMAGE SLIDER (Actualizado con Movimiento) */}
-               <section className="relative group/slider">
-                  <div 
-                    ref={promoSliderRef}
-                    className="flex gap-6 overflow-x-auto no-scrollbar scroll-smooth snap-x snap-mandatory pb-4 cursor-grab active:cursor-grabbing"
-                  >
-                     {PROMO_BANNERS.map((banner) => (
-                       <div key={banner.id} className="min-w-[85%] sm:min-w-[45%] lg:min-w-[32%] h-72 lg:h-80 relative rounded-[3rem] overflow-hidden snap-center flex-shrink-0 group/card shadow-xl border border-slate-100">
-                          <img src={banner.img} className="absolute inset-0 w-full h-full object-cover transition-transform duration-1000 group-hover/card:scale-110" />
-                          <div className={`absolute inset-0 bg-gradient-to-t ${banner.color} to-transparent opacity-80`}></div>
-                          <div className="absolute inset-x-0 bottom-0 p-8 lg:p-10 flex flex-col justify-end text-white">
-                             <span className="bg-white/20 backdrop-blur-md px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest w-fit mb-4">Campañas GIO+</span>
-                             <h3 className="text-2xl lg:text-3xl font-black leading-tight tracking-tighter mb-2">{banner.title}</h3>
-                             <p className="font-bold text-white/80">{banner.sub}</p>
-                             <button className="mt-6 flex items-center gap-2 text-xs font-black uppercase tracking-widest group/btn">
-                                Ver Selección <ArrowRight size={16} className="group-hover/btn:translate-x-2 transition-transform"/>
-                             </button>
-                          </div>
-                       </div>
-                     ))}
-                  </div>
-                  
-                  {/* Controles de Navegación del Slider */}
-                  <div className="hidden lg:flex justify-between absolute top-1/2 -translate-y-1/2 -inset-x-8 pointer-events-none opacity-0 group-hover/slider:opacity-100 transition-opacity">
-                     <button 
-                       onClick={() => scrollSlider('left')}
-                       className="w-16 h-16 bg-white rounded-full shadow-2xl flex items-center justify-center pointer-events-auto hover:bg-[#e6007e] hover:text-white transition-all transform active:scale-90"
-                     >
-                       <ChevronLeft size={28}/>
-                     </button>
-                     <button 
-                       onClick={() => scrollSlider('right')}
-                       className="w-16 h-16 bg-white rounded-full shadow-2xl flex items-center justify-center pointer-events-auto hover:bg-[#e6007e] hover:text-white transition-all transform active:scale-90"
-                     >
-                       <ChevronRight size={28}/>
-                     </button>
-                  </div>
+           {adminTab === 'catalog' && (
+             <div className="space-y-12">
+                <h2 className="text-5xl font-black text-slate-900 uppercase italic tracking-tighter">Gestión Catálogo</h2>
+                <div className="bg-white p-12 rounded-[4rem] border border-slate-100 space-y-8">
+                   <h3 className="text-xl font-black uppercase tracking-tighter text-slate-400 flex items-center gap-3"><Filter size={20}/> Ocultar Categorías</h3>
+                   <div className="flex flex-wrap gap-3">
+                      {allCategories.map(cat => (
+                        <button key={cat} onClick={() => {
+                          const newHidden = new Set(config.hiddenCategories);
+                          if (newHidden.has(cat)) newHidden.delete(cat); else newHidden.add(cat);
+                          saveConfig({...config, hiddenCategories: Array.from(newHidden)});
+                        }} className={`px-6 py-4 rounded-2xl border-2 transition-all font-black uppercase text-[10px] tracking-widest flex items-center gap-3 ${!hiddenCategories.has(cat) ? 'bg-[#8cc63f] border-[#8cc63f] text-white shadow-lg' : 'bg-white border-slate-100 text-slate-300'}`}>
+                           {!hiddenCategories.has(cat) ? <Eye size={16}/> : <EyeOff size={16}/>} {cat}
+                        </button>
+                      ))}
+                   </div>
+                </div>
 
-                  {/* Mobile Indicator Helper */}
-                  <div className="lg:hidden flex justify-center gap-2 mt-2">
-                     {PROMO_BANNERS.map((_, i) => (
-                        <div key={i} className="w-1.5 h-1.5 rounded-full bg-slate-200"></div>
-                     ))}
-                  </div>
-               </section>
-
-               {/* Grid de Productos */}
-               <section className="space-y-10">
-                  <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-                     <div className="space-y-2">
-                        <h2 className="text-4xl lg:text-6xl font-black text-slate-900 tracking-tighter">{activeCategory}</h2>
-                        <div className="flex items-center gap-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                           <Activity size={14} className="text-[#8cc63f]" /> Stock disponible actualizado
+                <div className="bg-white p-12 rounded-[4rem] border border-slate-100 space-y-8">
+                   <h3 className="text-xl font-black uppercase tracking-tighter text-slate-400 flex items-center gap-3"><Package size={20}/> Lista de Productos (Odoo)</h3>
+                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      {products.map(p => (
+                        <div key={p.id} className={`p-6 rounded-[2rem] border-2 transition-all flex items-center justify-between ${!hiddenProducts.has(p.id) ? 'bg-white border-slate-50' : 'bg-slate-50 opacity-50 border-transparent'}`}>
+                           <div className="flex items-center gap-4">
+                              <div className="w-12 h-12 bg-white rounded-xl border border-slate-100 flex items-center justify-center">
+                                 {p.image ? <img src={p.image} className="max-h-full max-w-full" /> : <Package size={20} className="text-slate-100"/>}
+                              </div>
+                              <div className="flex flex-col">
+                                 <span className="text-xs font-bold text-slate-800 line-clamp-1">{p.name}</span>
+                                 <span className="text-[9px] font-black text-[#e6007e] uppercase">{p.category}</span>
+                              </div>
+                           </div>
+                           <button onClick={() => {
+                             const newHidden = new Set(config.hiddenProducts);
+                             if (newHidden.has(p.id)) newHidden.delete(p.id); else newHidden.add(p.id);
+                             saveConfig({...config, hiddenProducts: Array.from(newHidden)});
+                           }} className={`p-4 rounded-xl ${!hiddenProducts.has(p.id) ? 'bg-slate-100 text-[#e6007e]' : 'bg-slate-200 text-slate-400'}`}>
+                              {!hiddenProducts.has(p.id) ? <Eye size={18}/> : <EyeOff size={18}/>}
+                           </button>
                         </div>
+                      ))}
+                   </div>
+                </div>
+             </div>
+           )}
+
+           {adminTab === 'banners' && (
+             <div className="space-y-10 animate-scale-in">
+                <div className="flex justify-between items-center">
+                   <h2 className="text-5xl font-black text-slate-900 uppercase italic tracking-tighter">Gestor Banners</h2>
+                   <button onClick={addBanner} className="px-8 py-5 bg-[#e6007e] text-white rounded-2xl font-black uppercase text-[10px] tracking-[0.2em] shadow-xl">+ Añadir Banner</button>
+                </div>
+                
+                <div className="p-8 bg-blue-50 border-2 border-blue-100 rounded-[2.5rem] flex items-center gap-6">
+                   <div className="w-14 h-14 bg-blue-500 text-white rounded-2xl flex items-center justify-center shadow-lg"><Info size={28}/></div>
+                   <div className="flex flex-col">
+                      <span className="text-blue-700 font-black uppercase text-[10px] tracking-widest">Guía de Imágenes</span>
+                      <p className="text-blue-500 text-sm font-medium italic">Se recomienda usar imágenes de **1600 x 800 px**. Si usas Supabase, pega el enlace público aquí.</p>
+                   </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-8">
+                   {config.banners.map((b: any, idx: number) => (
+                     <div key={idx} className="bg-white p-10 rounded-[4rem] border border-slate-100 flex flex-col md:flex-row gap-8 shadow-sm">
+                        <div className="w-full md:w-80 h-48 bg-slate-100 rounded-[2.5rem] overflow-hidden border border-slate-200 flex items-center justify-center">
+                           {b.img ? <img src={b.img} className="w-full h-full object-cover" /> : <ImageIcon size={60} className="text-slate-200"/>}
+                        </div>
+                        <div className="flex-1 space-y-6">
+                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div className="space-y-2">
+                                 <label className="text-[9px] font-black uppercase text-slate-400 ml-2">URL Imagen (Supabase/Link)</label>
+                                 <input type="text" className="w-full bg-slate-50 px-6 py-4 rounded-2xl font-bold border-2 border-transparent focus:border-[#e6007e] outline-none transition-all text-xs" value={b.img} onChange={e => updateBanners(idx, 'img', e.target.value)} placeholder="https://..." />
+                              </div>
+                              <div className="space-y-2">
+                                 <label className="text-[9px] font-black uppercase text-slate-400 ml-2">Título</label>
+                                 <input type="text" className="w-full bg-slate-50 px-6 py-4 rounded-2xl font-bold border-2 border-transparent focus:border-[#e6007e] outline-none transition-all text-xs" value={b.title} onChange={e => updateBanners(idx, 'title', e.target.value)} />
+                              </div>
+                           </div>
+                           <div className="space-y-2">
+                              <label className="text-[9px] font-black uppercase text-slate-400 ml-2">Descripción Corta</label>
+                              <input type="text" className="w-full bg-slate-50 px-6 py-4 rounded-2xl font-bold border-2 border-transparent focus:border-[#e6007e] outline-none transition-all text-xs" value={b.desc} onChange={e => updateBanners(idx, 'desc', e.target.value)} />
+                           </div>
+                        </div>
+                        <button onClick={() => removeBanner(idx)} className="self-center p-6 bg-red-50 text-red-500 rounded-2xl hover:bg-red-500 hover:text-white transition-all shadow-sm"><Trash2 size={24}/></button>
                      </div>
-                  </div>
+                   ))}
+                </div>
+             </div>
+           )}
 
-                  <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 lg:gap-10">
-                     {filteredProducts.map((p, idx) => (
-                       <div key={p.id} className="bg-white rounded-[2.5rem] lg:rounded-[3.5rem] p-6 lg:p-10 border border-slate-50 shadow-sm hover:shadow-2xl transition-all duration-500 group flex flex-col h-full animate-fade-up" style={{ animationDelay: `${idx * 0.05}s` }}>
-                          <div className="aspect-square bg-slate-50/50 rounded-[2.5rem] p-6 mb-6 lg:mb-10 relative overflow-hidden shrink-0 border border-slate-100/30">
-                             {p.promo && <div className="absolute top-4 left-4 bg-[#e6007e] text-white px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest shadow-xl">Hot Offer</div>}
-                             <img src={p.image} className="w-full h-full object-contain mix-blend-multiply group-hover:scale-110 transition-transform duration-700" />
-                          </div>
-                          <div className="flex-1 space-y-2 mb-8">
-                             <span className="text-[8px] lg:text-[10px] font-black text-[#8cc63f] uppercase tracking-widest">{p.category}</span>
-                             <h3 className="font-black text-slate-900 text-sm lg:text-xl leading-tight line-clamp-2">{p.name}</h3>
-                             <p className="text-[9px] font-bold text-slate-300 italic">Disponibilidad: {p.stock} unidades</p>
-                          </div>
-                          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mt-auto">
-                             <div className="flex flex-col">
-                                <span className="text-[8px] lg:text-[10px] font-black text-slate-300 uppercase">Precio</span>
-                                <span className="text-xl lg:text-3xl font-black text-slate-900">S/ {p.price.toFixed(2)}</span>
-                             </div>
-                             <button onClick={() => addToCart(p)} className="p-4 lg:p-5 bg-slate-900 text-white rounded-[1.5rem] hover:bg-[#e6007e] transition-all flex items-center justify-center shadow-lg active:scale-90"><Plus size={24} strokeWidth={3} /></button>
-                          </div>
+           {adminTab === 'config' && (
+             <div className="max-w-4xl space-y-10">
+                <div className="bg-white p-12 rounded-[4rem] border border-slate-100 space-y-12 shadow-sm">
+                    <h3 className="text-3xl font-black text-slate-900 uppercase italic border-b border-slate-100 pb-8 tracking-tighter flex items-center gap-4"><Building2 className="text-[#e6007e]"/> Datos Empresa</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                       <div className="space-y-3">
+                          <label className="text-[10px] font-black uppercase text-slate-400 ml-2 tracking-widest">Nombre Comercial</label>
+                          <input type="text" title="Nombre de Empresa" className="w-full bg-slate-50 px-6 py-5 rounded-2xl font-bold border-2 border-transparent focus:border-[#e6007e] focus:bg-white outline-none transition-all" value={config.companyName} onChange={e => saveConfig({...config, companyName: e.target.value})} />
                        </div>
-                     ))}
-                  </div>
-               </section>
-            </div>
-         </main>
+                       <div className="space-y-3">
+                          <label className="text-[10px] font-black uppercase text-slate-400 ml-2 tracking-widest">WhatsApp de Pedidos</label>
+                          <input type="text" title="WhatsApp" className="w-full bg-slate-50 px-6 py-5 rounded-2xl font-bold border-2 border-transparent focus:border-[#e6007e] focus:bg-white outline-none transition-all" value={config.whatsapp} onChange={e => saveConfig({...config, whatsapp: e.target.value})} />
+                       </div>
+                       <div className="space-y-3">
+                          <label className="text-[10px] font-black uppercase text-slate-400 ml-2 tracking-widest">Número Yape de Pago</label>
+                          <input type="text" title="Yape" className="w-full bg-slate-50 px-6 py-5 rounded-2xl font-bold border-2 border-transparent focus:border-[#e6007e] focus:bg-white outline-none transition-all" value={config.yape} onChange={e => saveConfig({...config, yape: e.target.value})} />
+                       </div>
+                    </div>
+                </div>
+
+                <div className="bg-white p-12 rounded-[4rem] border border-slate-100 space-y-12 shadow-sm">
+                   <h3 className="text-3xl font-black text-slate-900 uppercase italic border-b border-slate-100 pb-8 tracking-tighter flex items-center gap-4"><Settings className="text-[#8cc63f]"/> Parámetros Odoo ERP</h3>
+                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                      {['url', 'db', 'user', 'apiKey'].map(key => (
+                        <div key={key} className="space-y-3">
+                           <label className="text-[10px] font-black uppercase text-slate-400 ml-2 tracking-widest">{key}</label>
+                           <input type={key === 'apiKey' ? 'password' : 'text'} title={key} className="w-full bg-slate-50 px-6 py-5 rounded-2xl font-mono text-sm border-2 border-transparent focus:border-[#e6007e] focus:bg-white outline-none transition-all" value={(config as any)[key]} onChange={e => saveConfig({...config, [key]: e.target.value})} />
+                        </div>
+                      ))}
+                   </div>
+                   <button onClick={() => { syncERP(); alert("Configuración guardada y sincronizando..."); }} className="w-full py-8 bg-[#8cc63f] text-white rounded-[2rem] font-black uppercase shadow-2xl hover:brightness-105 transition-all text-xs tracking-[0.4em]">Actualizar Enlace Maestro</button>
+                </div>
+             </div>
+           )}
+        </main>
       </div>
-
-      <nav className="lg:hidden fixed bottom-0 left-0 right-0 h-24 bg-white/95 backdrop-blur-xl border-t border-slate-100 flex items-center justify-around px-6 z-[150] pb-4">
-         {[
-           { icon: Home, label: 'Inicio', view: 'welcome' },
-           { icon: MenuIcon, label: 'Menú', view: 'menu' },
-           { icon: Activity, label: 'IA Salud', action: () => setIsAiOpen(true) },
-           { icon: LayoutDashboard, label: 'ERP', action: handleLogoClick }
-         ].map((item, i) => (
-           <button key={i} onClick={() => item.view ? setView(item.view as any) : item.action && item.action()} className={`flex flex-col items-center gap-1.5 ${view === item.view ? 'text-[#e6007e]' : 'text-slate-300'} transition-all`}>
-              <item.icon size={22} strokeWidth={view === item.view ? 2.5 : 2} />
-              <span className="text-[9px] font-black uppercase tracking-widest">{item.label}</span>
-           </button>
-         ))}
-      </nav>
-
-      {/* Auth Modal Admin */}
-      {showPassModal && (
-        <div className="fixed inset-0 z-[500] flex items-center justify-center p-6 animate-fade-up">
-           <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-2xl" onClick={() => setShowPassModal(false)}></div>
-           <div className="relative bg-white w-full max-w-md rounded-[4rem] p-16 text-center space-y-10 shadow-3xl border border-white">
-              <div className="w-24 h-24 bg-[#e6007e]/10 text-[#e6007e] rounded-[2.5rem] flex items-center justify-center mx-auto"><KeyRound size={48}/></div>
-              <div className="space-y-2">
-                 <h3 className="text-3xl font-black text-slate-900 tracking-tight">Acceso Central</h3>
-                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Identificación Profesional Requerida</p>
-              </div>
-              <input type="password" autoFocus placeholder="PIN" className="w-full p-8 bg-slate-50 rounded-[2.5rem] border-2 border-slate-100 text-center text-4xl font-black outline-none focus:border-[#e6007e] transition-all tracking-[0.4em]" value={passInput} onChange={e => setPassInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleVerifyPass()} />
-              <Button onClick={handleVerifyPass} className="w-full py-7 text-xl">Autenticar Sistema</Button>
-           </div>
-        </div>
-      )}
-
-      {/* Cart Drawer */}
-      {isCartOpen && (
-        <div className="fixed inset-0 z-[300] flex justify-end transition-all">
-           <div className="absolute inset-0 bg-slate-950/20 backdrop-blur-md" onClick={() => setIsCartOpen(false)}></div>
-           <div className="relative w-full lg:max-w-lg h-full bg-white shadow-2xl flex flex-col">
-              <div className="p-10 border-b flex justify-between items-center bg-slate-50/30 shrink-0">
-                 <h3 className="text-2xl font-black">Tu Bolsa</h3>
-                 <button onClick={() => setIsCartOpen(false)} className="p-3 bg-white rounded-2xl border border-slate-100"><X size={28}/></button>
-              </div>
-              <div className="flex-1 overflow-y-auto p-10 space-y-8 no-scrollbar">
-                 {cart.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center opacity-20 text-center gap-6">
-                       <ShoppingCart size={100} strokeWidth={1} />
-                       <p className="font-black text-sm uppercase tracking-widest">Aún no hay productos</p>
-                    </div>
-                 ) : cart.map(item => (
-                    <div key={item.id} className="flex gap-6 p-4 bg-slate-50 rounded-[2.5rem]">
-                       <div className="w-24 h-24 bg-white p-3 rounded-2xl shrink-0"><img src={item.image} className="w-full h-full object-contain" /></div>
-                       <div className="flex-1">
-                          <p className="font-black text-slate-900">{item.name}</p>
-                          <p className="font-black text-[#e6007e] text-lg">S/ {item.price.toFixed(2)}</p>
-                          <div className="flex items-center gap-4 mt-3">
-                             <button onClick={() => setCart(prev => prev.map(i => i.id === item.id ? {...i, quantity: Math.max(1, i.quantity - 1)} : i))} className="p-2 bg-white rounded-lg"><Minus size={14}/></button>
-                             <span className="font-black">{item.quantity}</span>
-                             <button onClick={() => addToCart(item)} className="p-2 bg-white rounded-lg"><Plus size={14}/></button>
-                          </div>
-                       </div>
-                       <button onClick={() => setCart(prev => prev.filter(i => i.id !== item.id))} className="text-slate-300 hover:text-red-500"><Trash2 size={20}/></button>
-                    </div>
-                 ))}
-              </div>
-              <div className="p-10 border-t bg-slate-50/50 space-y-6">
-                 <div className="flex justify-between items-end"><span className="text-[10px] font-black uppercase tracking-widest">Total</span><span className="text-5xl font-black">S/ {total.toFixed(2)}</span></div>
-                 <Button disabled={cart.length === 0} onClick={() => setView('checkout')} className="w-full py-7 text-lg shadow-2xl">Confirmar Pedido</Button>
-              </div>
-           </div>
-        </div>
-      )}
-
-      {/* AI Assistant */}
-      {isAiOpen && (
-        <div className="fixed inset-0 z-[400] flex justify-center lg:justify-end animate-fade-up">
-           <div className="absolute inset-0 bg-slate-950/20 backdrop-blur-xl hidden lg:block" onClick={() => setIsAiOpen(false)}></div>
-           <div className="relative w-full lg:max-w-xl h-full bg-white flex flex-col overflow-hidden">
-              <div className="p-10 bg-slate-950 text-white flex justify-between items-center">
-                 <h3 className="text-2xl font-black flex items-center gap-3">Asistente GIO+ <Sparkles size={20} className="text-[#8cc63f]"/></h3>
-                 <button onClick={() => setIsAiOpen(false)} className="p-3 bg-white/10 rounded-2xl"><X size={28}/></button>
-              </div>
-              <div className="flex-1 p-10 overflow-y-auto space-y-8 bg-slate-50/30 no-scrollbar">
-                 {aiResponse && <div className="bg-white p-10 rounded-[2.5rem] text-slate-700 font-medium border border-slate-100 shadow-sm leading-relaxed">{aiResponse}</div>}
-                 {isAiLoading && <div className="flex gap-2 p-4 bg-white rounded-full w-fit"><div className="w-2 h-2 bg-[#e6007e] rounded-full animate-bounce"></div><div className="w-2 h-2 bg-[#e6007e] rounded-full animate-bounce delay-75"></div></div>}
-              </div>
-              <div className="p-8 lg:p-10 bg-white border-t flex gap-4 shrink-0">
-                 <input className="flex-1 bg-slate-50 p-6 rounded-[2rem] outline-none font-bold text-sm border border-slate-100" placeholder="Pregunta sobre salud..." value={aiMessage} onChange={e => setAiMessage(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAiAsk()} />
-                 <button onClick={handleAiAsk} className="p-6 bg-slate-950 text-white rounded-[2rem] shadow-xl"><ArrowUpRight size={28}/></button>
-              </div>
-           </div>
-        </div>
-      )}
-
-      {/* Checkout Modal */}
-      {view === 'checkout' && (
-        <div className="fixed inset-0 z-[600] flex items-center justify-center p-6">
-           <div className="absolute inset-0 bg-slate-950/40 backdrop-blur-xl" onClick={() => setView('menu')}></div>
-           <div className="relative bg-white w-full max-w-xl rounded-[4rem] p-16 space-y-10 shadow-3xl animate-fade-up">
-              <h2 className="text-5xl font-black tracking-tighter">Resumen <br /> Final</h2>
-              <div className="bg-slate-50 p-10 rounded-[3rem] border border-slate-100 shadow-inner space-y-4">
-                 <div className="flex justify-between text-[10px] font-black uppercase tracking-widest text-slate-400"><span>Monto</span><span>S/ {total.toFixed(2)}</span></div>
-                 <div className="flex justify-between items-end pt-4 border-t border-slate-200">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-[#e6007e]">Total a Pagar</span>
-                    <span className="text-5xl font-black text-slate-900 leading-none">S/ {total.toFixed(2)}</span>
-                 </div>
-              </div>
-              <Button onClick={() => setView('success')} className="w-full py-8 text-xl">Finalizar Compra</Button>
-           </div>
-        </div>
-      )}
-
-      {/* Success View */}
-      {view === 'success' && (
-        <div className="fixed inset-0 z-[700] bg-white flex flex-col items-center justify-center p-8 text-center animate-fade-up">
-           <div className="w-40 h-40 bg-[#8cc63f]/10 text-[#8cc63f] rounded-[4rem] flex items-center justify-center mb-10"><CheckCircle2 size={80} /></div>
-           <h1 className="text-6xl font-black text-slate-900 tracking-tighter mb-4">¡LOGRADO!</h1>
-           <p className="text-xl text-slate-400 font-medium italic mb-12 max-w-md mx-auto">Tu salud llegará en 25 minutos. GIO+ FARMA te agradece.</p>
-           <Button onClick={() => { setView('welcome'); setCart([]); }} variant="dark" className="px-16">Regresar</Button>
-        </div>
-      )}
-    </div>
-  );
+    );
+  }
+  return null;
 };
 
 const rootElement = document.getElementById('root');
-if (rootElement) {
-  createRoot(rootElement).render(<App />);
-}
+if (rootElement) createRoot(rootElement).render(<App />);

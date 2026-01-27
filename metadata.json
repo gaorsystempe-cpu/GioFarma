@@ -1,6 +1,6 @@
 {
   "name": "GIO+FARMA ERP Connector",
-  "description": "Plataforma avanzada de autopedido farmacéutico con sincronización XML-RPC Odoo, gestión de inventario y mapeo de categorías inteligente.",
+  "description": "Plataforma avanzada de autopedido farmacéutico con sincronización XML-RPC Odoo, gestión de inventario y ficha técnica premium.",
   "requestFramePermissions": [
     "camera"
   ]
