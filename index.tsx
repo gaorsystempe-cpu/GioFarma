@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 
 /* ============================================================
-   ENGINE: ODOO XML-RPC MASTER (V31 - SERVERLESS PROXY INTEGRATION)
+   ENGINE: ODOO XML-RPC MASTER (V31.1 - FIXED SYNTAX)
    ============================================================ */
 
 const xmlEscape = (str: string) =>
@@ -233,7 +233,7 @@ const CheckoutModal = ({ cart, config, onClose, onOrderSuccess }: any) => {
       const client = new OdooClient(config.url, config.db);
       const uid = await client.rpcCall('common', 'authenticate', [config.db, config.user, config.apiKey, {}]);
       
-      const partners = await client.rpcCall('object', 'execute_kw', [config.db, uid, config.apiKey, 'res.partner', 'search', [[['phone', '=', userData.phone]]]);
+      const partners = await client.rpcCall('object', 'execute_kw', [config.db, uid, config.apiKey, 'res.partner', 'search', [[['phone', '=', userData.phone]]]]);
       let partnerId = partners?.[0];
       
       if (!partnerId) {
