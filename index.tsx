@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 
 /* ============================================================
-   ENGINE: ODOO XML-RPC MASTER (PRO CHECKOUT V28 - RESTORED ADMIN)
+   ENGINE: ODOO XML-RPC MASTER (V29 - HYBRID PROXY SYSTEM)
    ============================================================ */
 
 const xmlEscape = (str: string) =>
@@ -66,12 +66,10 @@ const parseValue = (node: Element): any => {
   }
 };
 
-const PROXIES = [
-  { name: 'Primary (IO)', fn: (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}` },
-  { name: 'Secondary (AO)', fn: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
-  { name: 'Tertiary (CT)', fn: (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}` },
-  { name: 'Quaternary (SH)', fn: (u: string) => `https://shcors.herokuapp.com/${u}` },
-  { name: 'Alternative (TP)', fn: (u: string) => `https://thingproxy.freeboard.io/fetch/${u}` }
+const PUBLIC_PROXIES = [
+  { name: 'Backup (IO)', fn: (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}` },
+  { name: 'Backup (AO)', fn: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
+  { name: 'Backup (CT)', fn: (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}` }
 ];
 
 class OdooClient {
@@ -84,17 +82,42 @@ class OdooClient {
     const xml = `<?xml version="1.0"?><methodCall><methodName>${method}</methodName><params>${params.map(p => `<param>${serialize(p)}</param>`).join('')}</params></methodCall>`;
     const baseUrl = `${this.url}/xmlrpc/2/${endpoint}`;
     
+    // 1. Intentar Vía Backend Proxy Propio (ELIMINA CORS Y NETWORK ERRORS)
+    try {
+      if (this.onLog) this.onLog(`[Conector] Intentando vía Backend Proxy Local...`);
+      const response = await fetch('/api/odoo-proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: baseUrl, body: xml }),
+        signal: AbortSignal.timeout(15000) 
+      });
+
+      if (response.ok) {
+        const text = await response.text();
+        const doc = new DOMParser().parseFromString(text, 'text/xml');
+        const fault = doc.querySelector('fault value');
+        if (fault) throw new Error(parseValue(fault).faultString || 'Error Odoo');
+        const resultNode = doc.querySelector('params param value');
+        if (this.onLog) this.onLog(`[Conector] ¡Éxito vía Backend Proxy!`);
+        return resultNode ? parseValue(resultNode) : null;
+      }
+      if (this.onLog) this.onLog(`[Info] Backend Proxy no disponible (${response.status}). Activando rotación pública...`);
+    } catch (e: any) {
+      if (this.onLog) this.onLog(`[Info] Fallo en Backend Proxy: ${e.message}. Usando sistema de respaldo.`);
+    }
+
+    // 2. Sistema de Respaldo: Rotación de Proxies Públicos
     let lastError = "Todos los túneles de conexión están congestionados.";
-    for (const proxy of PROXIES) {
+    for (const proxy of PUBLIC_PROXIES) {
       try {
-        if (this.onLog) this.onLog(`[Conector] Probando vía ${proxy.name}...`);
+        if (this.onLog) this.onLog(`[Respaldo] Probando vía ${proxy.name}...`);
         const targetUrl = proxy.fn(baseUrl);
         const response = await fetch(targetUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'text/xml', 'X-Requested-With': 'XMLHttpRequest' },
           body: xml,
           mode: 'cors',
-          signal: AbortSignal.timeout(18000) 
+          signal: AbortSignal.timeout(12000) 
         });
         if (!response.ok) throw new Error(`Status ${response.status}`);
         const text = await response.text();
@@ -103,7 +126,7 @@ class OdooClient {
         const fault = doc.querySelector('fault value');
         if (fault) throw new Error(parseValue(fault).faultString || 'Error Odoo');
         const resultNode = doc.querySelector('params param value');
-        if (this.onLog) this.onLog(`[Conector] ¡Éxito vía ${proxy.name}!`);
+        if (this.onLog) this.onLog(`[Respaldo] ¡Éxito vía ${proxy.name}!`);
         return resultNode ? parseValue(resultNode) : null;
       } catch (e: any) { 
         lastError = e.message;
@@ -255,7 +278,7 @@ const App = () => {
     if (!config.apiKey || !config.url || !config.db) return setError("Configuración incompleta.");
     if (!isSilent) setLoading(true);
     setError(null);
-    addLog("Conectando con Odoo vía Ultra-Proxy...");
+    addLog("Iniciando secuencia de sincronización segura...");
     try {
       const client = new OdooClient(config.url, config.db, addLog);
       const uid = await client.rpcCall('common', 'authenticate', [config.db, config.user, config.apiKey, {}]);
@@ -264,7 +287,7 @@ const App = () => {
       if (Array.isArray(raw)) {
         const mapped = raw.map(p => ({ id: p.id, name: p.display_name || p.name, price: p.list_price || 0, stock: p.qty_available || 0, category: Array.isArray(p.categ_id) ? p.categ_id[1] : 'OTROS', finalPrice: p.list_price || 0, image: p.image_128 ? `data:image/png;base64,${p.image_128}` : null }));
         setProducts(mapped);
-        addLog(`Catálogo cargado: ${mapped.length} productos.`);
+        addLog(`Catálogo actualizado: ${mapped.length} productos listos.`);
       }
     } catch (e: any) { setError(e.message); addLog(e.message); } finally { if (!isSilent) setLoading(false); }
   }, [config]);
@@ -300,8 +323,21 @@ const App = () => {
            <div className="relative"><input type="text" placeholder="Buscar en Odoo..." className="w-full pl-14 pr-6 py-5 bg-slate-50 border-2 border-transparent focus:border-[#e6007e] rounded-2xl font-bold outline-none" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} /><Search className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300" size={20}/></div>
         </header>
         <main className="p-10 md:p-24 space-y-16">
+           {/* Diapositivas en el catálogo de la web */}
            <BannerCarousel config={config} compact={true} />
-           {loading ? <div className="py-32 text-center text-slate-400 font-black uppercase">Cargando Odoo...</div> : error ? <div className="py-32 text-center text-red-400 font-bold">{error} <button onClick={() => syncERP()} className="block mx-auto mt-4 underline">Reintentar</button></div> : (
+           
+           {loading ? (
+             <div className="py-32 text-center">
+               <RefreshCw size={48} className="animate-spin text-[#e6007e] mx-auto mb-4" />
+               <p className="text-slate-400 font-black uppercase tracking-widest">Consultando Odoo...</p>
+             </div>
+           ) : error ? (
+             <div className="py-32 text-center bg-white rounded-[3rem] border-2 border-red-50 p-12">
+               <AlertCircle size={48} className="text-red-400 mx-auto mb-4" />
+               <p className="text-red-400 font-bold mb-4">{error}</p>
+               <button onClick={() => syncERP()} className="px-8 py-4 bg-slate-950 text-white rounded-2xl font-black uppercase text-[10px]">Reintentar Conexión</button>
+             </div>
+           ) : (
              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-8">
                 {filteredProducts.map(p => (
                   <div key={p.id} className="bg-white p-6 rounded-[2.5rem] border shadow-sm hover:shadow-2xl transition-all group animate-fade-up">
@@ -346,7 +382,7 @@ const App = () => {
         <main className="flex-1 p-12 overflow-y-auto">
            {adminTab === 'status' && (
              <div className="space-y-8 animate-fade-up">
-                <h2 className="text-5xl font-black text-slate-900 uppercase italic">Túnel de Red</h2>
+                <h2 className="text-5xl font-black text-slate-900 uppercase italic">Estado del Túnel</h2>
                 <div className="bg-slate-900 rounded-[3rem] p-10 h-[500px] overflow-y-auto font-mono text-[13px] text-[#8cc63f] shadow-2xl no-scrollbar">
                    {syncLogs.length > 0 ? syncLogs.map((log, i) => <p key={i} className="mb-2 opacity-80"><span className="opacity-30 mr-4">[{i+1}]</span> {log}</p>) : <p className="opacity-40">Sin logs...</p>}
                 </div>
