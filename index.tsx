@@ -8,11 +8,11 @@ import {
   Filter, LayoutGrid, Eye, EyeOff, Verified, ArrowUpRight, PackagePlus,
   CheckCircle2, Info, BookOpen, Sparkles, Zap, Shield, Clock, ChevronDown, 
   MapPin, User, Phone, Send, ChevronRight as ChevronRightIcon, Copy, Check,
-  Building2, MessageCircle, Image as ImageIcon, Trash2
+  Building2, MessageCircle, Image as ImageIcon, Trash2, AlertCircle
 } from 'lucide-react';
 
 /* ============================================================
-   ENGINE: ODOO XML-RPC MASTER (PRO CHECKOUT V23)
+   ENGINE: ODOO XML-RPC MASTER (PRO CHECKOUT V25 - FIX 413)
    ============================================================ */
 
 const xmlEscape = (str: string) =>
@@ -88,10 +88,14 @@ class OdooClient {
           method: 'POST',
           headers: { 'Content-Type': 'text/xml' },
           body: xml,
-          signal: AbortSignal.timeout(20000)
+          signal: AbortSignal.timeout(25000)
         });
         if (!response.ok) {
-          lastError = `HTTP ${response.status}`;
+          if (response.status === 413) {
+            lastError = "Error 413: Demasiados datos. Reduciendo límites de carga...";
+          } else {
+            lastError = `HTTP ${response.status}`;
+          }
           continue;
         }
         const text = await response.text();
@@ -108,7 +112,7 @@ class OdooClient {
         if (this.onLog) this.onLog(`Log: ${e.message}`);
       }
     }
-    throw new Error(lastError);
+    throw new Error(lastError || "No se pudo conectar con el proxy.");
   }
 }
 
@@ -156,7 +160,7 @@ const PharmaLogo = ({ config, onAdminRequest }: { config: any, onAdminRequest: (
     }
   };
 
-  const name = config.companyName || "GIOFARMA";
+  const name = config?.companyName || "GIOFARMA";
   const part1 = name.substring(0, Math.ceil(name.length/2));
   const part2 = name.substring(Math.ceil(name.length/2));
 
@@ -174,20 +178,27 @@ const PharmaLogo = ({ config, onAdminRequest }: { config: any, onAdminRequest: (
 };
 
 const BannerCarousel = ({ config, compact = false }: { config: any, compact?: boolean }) => {
-  const banners = config.banners || DEFAULT_CONFIG.banners;
+  // Verificación extra de seguridad para evitar banners vacíos por persistencia dañada
+  const validBanners = useMemo(() => {
+    if (config?.banners && Array.isArray(config.banners) && config.banners.length > 0) {
+      // Filtrar banners que tengan al menos imagen y título
+      const filtered = config.banners.filter((b: any) => b && b.img && b.title);
+      if (filtered.length > 0) return filtered;
+    }
+    return DEFAULT_CONFIG.banners;
+  }, [config?.banners]);
+
   const [curr, setCurr] = useState(0);
 
   useEffect(() => {
-    if (banners.length <= 1) return;
-    const it = setInterval(() => setCurr(c => (c + 1) % banners.length), 5000);
+    if (validBanners.length <= 1) return;
+    const it = setInterval(() => setCurr(c => (c + 1) % validBanners.length), 6000);
     return () => clearInterval(it);
-  }, [banners.length]);
-
-  if (banners.length === 0) return null;
+  }, [validBanners.length]);
 
   return (
-    <div className={`relative w-full overflow-hidden rounded-[3.5rem] shadow-2xl animate-scale-in ${compact ? 'h-[250px] md:h-[400px]' : 'h-[350px] md:h-[550px]'}`}>
-      {banners.map((b: any, i: number) => (
+    <div className={`relative w-full overflow-hidden rounded-[3.5rem] shadow-2xl animate-scale-in ${compact ? 'h-[250px] md:h-[400px]' : 'h-[350px] md:h-[550px]'} bg-slate-100`}>
+      {validBanners.map((b: any, i: number) => (
         <div key={i} className={`absolute inset-0 transition-all duration-1000 ${i === curr ? 'opacity-100 scale-100' : 'opacity-0 scale-105'}`}>
           <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent z-10" />
           <img src={b.img} className="w-full h-full object-cover" alt={b.title} />
@@ -197,11 +208,13 @@ const BannerCarousel = ({ config, compact = false }: { config: any, compact?: bo
           </div>
         </div>
       ))}
-      <div className="absolute bottom-6 right-8 z-30 flex gap-2.5">
-         {banners.map((_: any, i: number) => (
-           <div key={i} className={`h-2 rounded-full transition-all duration-500 ${i === curr ? 'w-10 bg-white shadow-lg' : 'w-3 bg-white/30'}`} />
-         ))}
-      </div>
+      {validBanners.length > 1 && (
+        <div className="absolute bottom-6 right-8 z-30 flex gap-2.5">
+          {validBanners.map((_: any, i: number) => (
+            <div key={i} className={`h-2 rounded-full transition-all duration-500 ${i === curr ? 'w-10 bg-white shadow-lg' : 'w-3 bg-white/30'}`} />
+          ))}
+        </div>
+      )}
     </div>
   );
 };
@@ -235,8 +248,7 @@ const CheckoutModal = ({ cart, config, onClose, onOrderSuccess }: any) => {
       const uid = await client.rpcCall('common', 'authenticate', [config.db, config.user, config.apiKey, {}]);
       if (!uid) throw new Error("Error de conexión con Odoo.");
 
-      // --- 1. BUSCAR O CREAR CLIENTE (res.partner) ---
-      // Buscamos si existe un partner con ese teléfono (mobile o phone)
+      // 1. BUSCAR O CREAR CLIENTE
       const partners = await client.rpcCall('object', 'execute_kw', [
         config.db, uid, config.apiKey,
         'res.partner', 'search',
@@ -245,9 +257,8 @@ const CheckoutModal = ({ cart, config, onClose, onOrderSuccess }: any) => {
 
       let finalPartnerId;
       if (Array.isArray(partners) && partners.length > 0) {
-        finalPartnerId = partners[0]; // Usamos el existente
+        finalPartnerId = partners[0];
       } else {
-        // Creamos uno nuevo
         finalPartnerId = await client.rpcCall('object', 'execute_kw', [
           config.db, uid, config.apiKey,
           'res.partner', 'create',
@@ -261,7 +272,7 @@ const CheckoutModal = ({ cart, config, onClose, onOrderSuccess }: any) => {
         ]);
       }
 
-      // --- 2. CREAR LA ORDEN DE VENTA (sale.order) ---
+      // 2. CREAR LA ORDEN DE VENTA
       const orderId = await client.rpcCall('object', 'execute_kw', [
         config.db, uid, config.apiKey,
         'sale.order', 'create',
@@ -271,7 +282,7 @@ const CheckoutModal = ({ cart, config, onClose, onOrderSuccess }: any) => {
         }]
       ]);
 
-      // --- 3. CREAR LAS LÍNEAS DEL PEDIDO ---
+      // 3. CREAR LAS LÍNEAS
       for (const item of cart) {
         await client.rpcCall('object', 'execute_kw', [
           config.db, uid, config.apiKey,
@@ -286,7 +297,7 @@ const CheckoutModal = ({ cart, config, onClose, onOrderSuccess }: any) => {
         ]);
       }
 
-      // --- 4. REDIRECCIÓN WHATSAPP ---
+      // 4. REDIRECCIÓN WHATSAPP
       const summary = cart.map((i: any) => `• ${i.q}x ${i.name} (${i.u}) -> S/ ${(i.finalPrice * i.q).toFixed(2)}`).join('%0A');
       const waMsg = `*🚀 NUEVO PEDIDO - GIOFARMA*%0A%0A*ORDEN ODOO:* #${orderId}%0A*CLIENTE:* ${userData.name}%0A*TELÉFONO:* ${userData.phone}%0A*TIPO:* ${orderType === 'delivery' ? '🚚 DELIVERY' : '🏪 RECOJO EN TIENDA'}%0A${orderType === 'delivery' ? `*DIRECCIÓN:* ${userData.address}%0A` : ''}%0A*ESTADO PAGO:* Confirmado via YAPE%0A%0A*DETALLE:*%0A${summary}%0A%0A*TOTAL A PAGAR: S/ ${total.toFixed(2)}*%0A%0A_Enviado desde el Portal de Autopedido_`;
       
@@ -467,6 +478,7 @@ const App = () => {
   const [products, setProducts] = useState<any[]>([]);
   const [allCategories, setAllCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState("Todos");
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
@@ -475,7 +487,7 @@ const App = () => {
   const [showCheckout, setShowCheckout] = useState(false);
 
   const [config, setConfig] = useState(() => {
-    const saved = localStorage.getItem('giofarma_config_v23');
+    const saved = localStorage.getItem('giofarma_config_v25');
     return saved ? { ...DEFAULT_CONFIG, ...JSON.parse(saved) } : DEFAULT_CONFIG;
   });
 
@@ -486,38 +498,96 @@ const App = () => {
 
   const saveConfig = (newConfig: any) => {
     setConfig(newConfig);
-    localStorage.setItem('giofarma_config_v23', JSON.stringify(newConfig));
+    localStorage.setItem('giofarma_config_v25', JSON.stringify(newConfig));
   };
 
   const syncERP = useCallback(async (isSilent = false) => {
-    if (!config.apiKey || !config.url || !config.db) return;
+    if (!config.apiKey || !config.url || !config.db) {
+        setError("Faltan credenciales de Odoo");
+        return;
+    }
     if (!isSilent) setLoading(true);
-    addLog("Accediendo a Odoo RPC...");
+    setError(null);
+    addLog("Iniciando conexión con Odoo...");
+
     try {
       const client = new OdooClient(config.url, config.db, addLog);
       const uid = await client.rpcCall('common', 'authenticate', [config.db, config.user, config.apiKey, {}]);
-      if (!uid) throw new Error("Acceso denegado.");
+      if (!uid) throw new Error("Acceso denegado. Verifique su API Key.");
       
-      const rawProducts = await client.rpcCall('object', 'execute_kw', [config.db, uid, config.apiKey, 'product.product', 'search_read', [[['sale_ok', '=', true]]], { fields: ['name', 'list_price', 'qty_available', 'categ_id', 'image_128', 'default_code', 'display_name', 'product_tmpl_id', 'description_sale'], limit: 1000 }]);
-      const rawPrices = await client.rpcCall('object', 'execute_kw', [config.db, uid, config.apiKey, 'product.pricelist.item', 'search_read', [[['fixed_price', '>', 0]]], { fields: ['product_id', 'product_tmpl_id', 'fixed_price', 'min_quantity', 'display_name', 'uom_id'], limit: 3000 }]);
+      addLog("Autenticado exitosamente. Cargando catálogo optimizado...");
+
+      // REDUCCIÓN DE LÍMITES PARA EVITAR ERROR 413 (PAYLOAD TOO LARGE)
+      // Se bajó el límite de 1000 a 80 productos iniciales para asegurar carga exitosa sobre proxies.
+      const rawProducts = await client.rpcCall('object', 'execute_kw', [
+        config.db, uid, config.apiKey, 
+        'product.product', 'search_read', 
+        [[['sale_ok', '=', true]]], 
+        { 
+          fields: ['name', 'list_price', 'qty_available', 'categ_id', 'image_128', 'display_name', 'product_tmpl_id', 'description_sale'], 
+          limit: 80 
+        }
+      ]);
+
+      const rawPrices = await client.rpcCall('object', 'execute_kw', [
+        config.db, uid, config.apiKey, 
+        'product.pricelist.item', 'search_read', 
+        [[['fixed_price', '>', 0]]], 
+        { 
+          fields: ['product_id', 'product_tmpl_id', 'fixed_price', 'min_quantity', 'display_name', 'uom_id'], 
+          limit: 150 
+        }
+      ]);
 
       if (Array.isArray(rawProducts)) {
           const mapped = rawProducts.map((p: any) => {
             const productName = p.display_name || p.name;
-            const rules = (rawPrices || []).filter((r: any) => (r.product_id && r.product_id[0] === p.id) || (r.product_tmpl_id && r.product_tmpl_id[0] === p.product_tmpl_id?.[0]));
-            let finalPrices = rules.length > 0 ? rules.map((r: any) => ({ price: r.fixed_price, uom: (r.uom_id && Array.isArray(r.uom_id)) ? r.uom_id[1] : 'Unidad' })) : [{ price: p.list_price || 0, uom: 'Unidad' }];
-            return { id: p.id, name: productName, price: p.list_price || 0, stock: p.qty_available || 0, description: p.description_sale || '', category: Array.isArray(p.categ_id) ? p.categ_id[1] : 'FARMACIA', prices: finalPrices, image: p.image_128 ? `data:image/png;base64,${p.image_128}` : null };
+            const rules = (rawPrices || []).filter((r: any) => 
+              (r.product_id && r.product_id[0] === p.id) || 
+              (r.product_tmpl_id && r.product_tmpl_id[0] === p.product_tmpl_id?.[0])
+            );
+            let finalPrices = rules.length > 0 
+              ? rules.map((r: any) => ({ price: r.fixed_price, uom: (r.uom_id && Array.isArray(r.uom_id)) ? r.uom_id[1] : 'Unidad' })) 
+              : [{ price: p.list_price || 0, uom: 'Unidad' }];
+            
+            return { 
+              id: p.id, 
+              name: productName, 
+              price: p.list_price || 0, 
+              stock: p.qty_available || 0, 
+              description: p.description_sale || '', 
+              category: Array.isArray(p.categ_id) ? p.categ_id[1] : 'FARMACIA', 
+              prices: finalPrices, 
+              image: p.image_128 ? `data:image/png;base64,${p.image_128}` : null 
+            };
           });
+
           setProducts(mapped);
           setAllCategories(Array.from(new Set(mapped.map(p => p.category))).sort());
-          addLog("Sincronización Odoo completada.");
+          addLog(`Éxito: ${mapped.length} productos cargados.`);
+          if (mapped.length === 0) addLog("Odoo no devolvió productos activos (sale_ok=True).");
+      } else {
+          throw new Error("Respuesta inesperada del servidor.");
       }
-    } catch (e: any) { addLog(`Odoo Error: ${e.message}`); } finally { if (!isSilent) setLoading(false); }
+    } catch (e: any) { 
+      const msg = e.message.includes("413") 
+        ? "La carga es demasiado grande. Contacte a soporte para ajustar el catálogo." 
+        : `Odoo Error: ${e.message}`;
+      addLog(msg); 
+      setError(msg);
+    } finally { 
+      if (!isSilent) setLoading(false); 
+    }
   }, [config]);
 
   useEffect(() => { syncERP(); }, [syncERP]);
 
-  const filteredProducts = useMemo(() => products.filter(p => !hiddenProducts.has(p.id) && !hiddenCategories.has(p.category) && (activeCategory === "Todos" || p.category === activeCategory) && (p.name.toLowerCase().includes(searchQuery.toLowerCase()))).sort((a,b) => b.stock - a.stock), [products, searchQuery, activeCategory, hiddenProducts, hiddenCategories]);
+  const filteredProducts = useMemo(() => products.filter(p => 
+    !hiddenProducts.has(p.id) && 
+    !hiddenCategories.has(p.category) && 
+    (activeCategory === "Todos" || p.category === activeCategory) && 
+    (p.name.toLowerCase().includes(searchQuery.toLowerCase()))
+  ).sort((a,b) => b.stock - a.stock), [products, searchQuery, activeCategory, hiddenProducts, hiddenCategories]);
 
   // --- HANDLERS ADMIN ---
   const updateBanners = (idx: number, field: string, value: string) => {
@@ -527,7 +597,7 @@ const App = () => {
   };
 
   const addBanner = () => {
-    saveConfig({ ...config, banners: [...config.banners, { img: '', title: 'Nuevo Banner', desc: 'Descripción aquí' }] });
+    saveConfig({ ...config, banners: [...(config.banners || []), { img: '', title: 'Nuevo Banner', desc: 'Descripción' }] });
   };
 
   const removeBanner = (idx: number) => {
@@ -605,17 +675,41 @@ const App = () => {
 
         <main className="p-10 md:p-24 space-y-16">
            <BannerCarousel config={config} compact={true} />
-           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-8">
-              {filteredProducts.map(p => (
-                <div key={p.id} onClick={() => setSelectedProduct(p)} className="bg-white p-6 rounded-[3rem] border border-slate-100 shadow-sm hover:shadow-2xl transition-all cursor-pointer group">
-                  <div className="aspect-square bg-white rounded-[2.5rem] p-4 mb-4 flex items-center justify-center border border-slate-50 overflow-hidden">
-                     {p.image ? <img src={p.image} className="h-full w-full object-contain group-hover:scale-110 transition-transform" /> : <Package size={40} className="text-slate-100"/>}
-                  </div>
-                  <h3 className="text-[13px] font-black text-slate-800 uppercase italic line-clamp-2 h-10 leading-tight">{p.name}</h3>
-                  <div className="mt-6 text-2xl font-black text-slate-900 italic tracking-tighter">S/ {p.price.toFixed(2)}</div>
+           
+           {loading ? (
+             <div className="flex flex-col items-center justify-center py-32 space-y-6">
+                <RefreshCw size={48} className="animate-spin text-[#e6007e]" />
+                <p className="font-black uppercase tracking-[0.3em] text-slate-400">Conectando con Odoo...</p>
+             </div>
+           ) : error ? (
+             <div className="flex flex-col items-center justify-center py-32 space-y-8 bg-white rounded-[4rem] border-2 border-red-50 shadow-inner p-12">
+                <AlertCircle size={64} className="text-red-400" />
+                <div className="text-center space-y-4 px-4">
+                   <h2 className="text-2xl font-black uppercase tracking-tighter text-slate-800">Problema de Carga</h2>
+                   <p className="text-slate-400 font-medium italic max-w-md mx-auto">{error}</p>
+                   <p className="text-[10px] text-slate-300 uppercase font-black">Pruebe reducir el límite en ajustes o verifique la API Key.</p>
                 </div>
-              ))}
-           </div>
+                <button onClick={() => syncERP()} className="px-12 py-5 bg-slate-950 text-white rounded-2xl font-black uppercase tracking-widest hover:scale-105 active:scale-95 transition-all">Reintentar</button>
+             </div>
+           ) : products.length === 0 ? (
+             <div className="flex flex-col items-center justify-center py-32 space-y-6">
+                <Package size={64} className="text-slate-100" />
+                <p className="font-black uppercase tracking-[0.3em] text-slate-300">Catálogo Vacío o sin stock</p>
+                <button onClick={() => syncERP()} className="text-[10px] font-black uppercase text-[#e6007e] underline tracking-widest">Actualizar</button>
+             </div>
+           ) : (
+             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-8">
+                {filteredProducts.map(p => (
+                  <div key={p.id} onClick={() => setSelectedProduct(p)} className="bg-white p-6 rounded-[3rem] border border-slate-100 shadow-sm hover:shadow-2xl transition-all cursor-pointer group animate-fade-up">
+                    <div className="aspect-square bg-white rounded-[2.5rem] p-4 mb-4 flex items-center justify-center border border-slate-50 overflow-hidden">
+                       {p.image ? <img src={p.image} className="h-full w-full object-contain group-hover:scale-110 transition-transform" /> : <Package size={40} className="text-slate-100"/>}
+                    </div>
+                    <h3 className="text-[13px] font-black text-slate-800 uppercase italic line-clamp-2 h-10 leading-tight">{p.name}</h3>
+                    <div className="mt-6 text-2xl font-black text-slate-900 italic tracking-tighter">S/ {p.price.toFixed(2)}</div>
+                  </div>
+                ))}
+             </div>
+           )}
         </main>
       </div>
     );
@@ -632,6 +726,7 @@ const App = () => {
                  <input type="password" title="Contraseña" className="w-full bg-slate-50 border-2 border-slate-100 rounded-3xl px-8 py-8 text-center text-6xl font-black outline-none focus:border-[#e6007e] focus:bg-white transition-all tracking-[0.5em]" placeholder="••••" onChange={e => setAdminPassInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && adminPassInput === ADMIN_PASS && setAdminAuth(true)} />
               </div>
               <button onClick={() => adminPassInput === ADMIN_PASS ? setAdminAuth(true) : alert("Acceso Denegado")} className="w-full py-8 bg-slate-950 text-white rounded-3xl font-black uppercase tracking-[0.5em] text-xs transition-all active:scale-95 shadow-2xl">Autenticar ERP</button>
+              <button onClick={() => setView('home')} className="block w-full text-[10px] font-black uppercase text-slate-300 hover:text-[#e6007e]">Volver al Inicio</button>
            </div>
         </div>
       );
@@ -681,7 +776,7 @@ const App = () => {
                 </div>
 
                 <div className="bg-white p-12 rounded-[4rem] border border-slate-100 space-y-8">
-                   <h3 className="text-xl font-black uppercase tracking-tighter text-slate-400 flex items-center gap-3"><Package size={20}/> Lista de Productos (Odoo)</h3>
+                   <h3 className="text-xl font-black uppercase tracking-tighter text-slate-400 flex items-center gap-3"><Package size={20}/> Productos de Odoo ({products.length})</h3>
                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                       {products.map(p => (
                         <div key={p.id} className={`p-6 rounded-[2rem] border-2 transition-all flex items-center justify-between ${!hiddenProducts.has(p.id) ? 'bg-white border-slate-50' : 'bg-slate-50 opacity-50 border-transparent'}`}>
@@ -718,13 +813,13 @@ const App = () => {
                 <div className="p-8 bg-blue-50 border-2 border-blue-100 rounded-[2.5rem] flex items-center gap-6">
                    <div className="w-14 h-14 bg-blue-500 text-white rounded-2xl flex items-center justify-center shadow-lg"><Info size={28}/></div>
                    <div className="flex flex-col">
-                      <span className="text-blue-700 font-black uppercase text-[10px] tracking-widest">Guía de Imágenes</span>
-                      <p className="text-blue-500 text-sm font-medium italic">Se recomienda usar imágenes de **1600 x 800 px**. Si usas Supabase, pega el enlace público aquí.</p>
+                      <span className="text-blue-700 font-black uppercase text-[10px] tracking-widest">Aviso Importante</span>
+                      <p className="text-blue-500 text-sm font-medium italic">Si dejas el catálogo vacío, se usarán los banners de respaldo de GIOFARMA automáticamente.</p>
                    </div>
                 </div>
 
                 <div className="grid grid-cols-1 gap-8">
-                   {config.banners.map((b: any, idx: number) => (
+                   {config.banners?.map((b: any, idx: number) => (
                      <div key={idx} className="bg-white p-10 rounded-[4rem] border border-slate-100 flex flex-col md:flex-row gap-8 shadow-sm">
                         <div className="w-full md:w-80 h-48 bg-slate-100 rounded-[2.5rem] overflow-hidden border border-slate-200 flex items-center justify-center">
                            {b.img ? <img src={b.img} className="w-full h-full object-cover" /> : <ImageIcon size={60} className="text-slate-200"/>}
@@ -732,7 +827,7 @@ const App = () => {
                         <div className="flex-1 space-y-6">
                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                               <div className="space-y-2">
-                                 <label className="text-[9px] font-black uppercase text-slate-400 ml-2">URL Imagen (Supabase/Link)</label>
+                                 <label className="text-[9px] font-black uppercase text-slate-400 ml-2">URL Imagen</label>
                                  <input type="text" className="w-full bg-slate-50 px-6 py-4 rounded-2xl font-bold border-2 border-transparent focus:border-[#e6007e] outline-none transition-all text-xs" value={b.img} onChange={e => updateBanners(idx, 'img', e.target.value)} placeholder="https://..." />
                               </div>
                               <div className="space-y-2">
@@ -741,7 +836,7 @@ const App = () => {
                               </div>
                            </div>
                            <div className="space-y-2">
-                              <label className="text-[9px] font-black uppercase text-slate-400 ml-2">Descripción Corta</label>
+                              <label className="text-[9px] font-black uppercase text-slate-400 ml-2">Descripción</label>
                               <input type="text" className="w-full bg-slate-50 px-6 py-4 rounded-2xl font-bold border-2 border-transparent focus:border-[#e6007e] outline-none transition-all text-xs" value={b.desc} onChange={e => updateBanners(idx, 'desc', e.target.value)} />
                            </div>
                         </div>
@@ -758,15 +853,11 @@ const App = () => {
                     <h3 className="text-3xl font-black text-slate-900 uppercase italic border-b border-slate-100 pb-8 tracking-tighter flex items-center gap-4"><Building2 className="text-[#e6007e]"/> Datos Empresa</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                        <div className="space-y-3">
-                          <label className="text-[10px] font-black uppercase text-slate-400 ml-2 tracking-widest">Nombre Comercial</label>
-                          <input type="text" title="Nombre de Empresa" className="w-full bg-slate-50 px-6 py-5 rounded-2xl font-bold border-2 border-transparent focus:border-[#e6007e] focus:bg-white outline-none transition-all" value={config.companyName} onChange={e => saveConfig({...config, companyName: e.target.value})} />
-                       </div>
-                       <div className="space-y-3">
-                          <label className="text-[10px] font-black uppercase text-slate-400 ml-2 tracking-widest">WhatsApp de Pedidos</label>
+                          <label className="text-[10px] font-black uppercase text-slate-400 ml-2 tracking-widest">WhatsApp Pedidos</label>
                           <input type="text" title="WhatsApp" className="w-full bg-slate-50 px-6 py-5 rounded-2xl font-bold border-2 border-transparent focus:border-[#e6007e] focus:bg-white outline-none transition-all" value={config.whatsapp} onChange={e => saveConfig({...config, whatsapp: e.target.value})} />
                        </div>
                        <div className="space-y-3">
-                          <label className="text-[10px] font-black uppercase text-slate-400 ml-2 tracking-widest">Número Yape de Pago</label>
+                          <label className="text-[10px] font-black uppercase text-slate-400 ml-2 tracking-widest">Número Yape</label>
                           <input type="text" title="Yape" className="w-full bg-slate-50 px-6 py-5 rounded-2xl font-bold border-2 border-transparent focus:border-[#e6007e] focus:bg-white outline-none transition-all" value={config.yape} onChange={e => saveConfig({...config, yape: e.target.value})} />
                        </div>
                     </div>
@@ -782,7 +873,7 @@ const App = () => {
                         </div>
                       ))}
                    </div>
-                   <button onClick={() => { syncERP(); alert("Configuración guardada y sincronizando..."); }} className="w-full py-8 bg-[#8cc63f] text-white rounded-[2rem] font-black uppercase shadow-2xl hover:brightness-105 transition-all text-xs tracking-[0.4em]">Actualizar Enlace Maestro</button>
+                   <button onClick={() => { syncERP(); alert("Sincronizando con nuevos parámetros..."); }} className="w-full py-8 bg-[#8cc63f] text-white rounded-[2rem] font-black uppercase shadow-2xl hover:brightness-105 transition-all text-xs tracking-[0.4em]">Guardar y Sincronizar</button>
                 </div>
              </div>
            )}
