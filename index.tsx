@@ -12,53 +12,72 @@ import {
 } from 'lucide-react';
 
 /* ============================================================
-   ENGINE: ODOO XML-RPC MASTER (V29 - HYBRID PROXY SYSTEM)
+   ENGINE: ODOO XML-RPC MASTER (V31 - SERVERLESS PROXY INTEGRATION)
    ============================================================ */
 
 const xmlEscape = (str: string) =>
   str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
-const serialize = (value: any): string => {
-  if (value === null || value === undefined) return '<value><nil/></value>';
-  let content = '';
-  if (typeof value === 'number') {
-    content = Number.isInteger(value) ? `<int>${value}</int>` : `<double>${value}</double>`;
-  } else if (typeof value === 'string') {
-    content = `<string>${xmlEscape(value)}</string>`;
-  } else if (typeof value === 'boolean') {
-    content = `<boolean>${value ? '1' : '0'}</boolean>`;
-  } else if (Array.isArray(value)) {
-    content = `<array><data>${value.map(v => serialize(v)).join('')}</data></array>`;
-  } else if (typeof value === 'object') {
-    if (value instanceof Date) {
-      const iso = value.toISOString().replace(/\.\d+Z$/, '');
-      content = `<dateTime.iso8601>${iso}</dateTime.iso8601>`;
-    } else {
-      content = `<struct>${Object.entries(value).map(([k, v]) =>
-        `<member><name>${xmlEscape(k)}</name>${serialize(v)}</member>`
-      ).join('')}</struct>`;
-    }
+/**
+ * Serializador Estricto XML-RPC
+ * Genera estructuras compatibles con el estándar oficial de Odoo.
+ */
+const serializeToXmlValue = (value: any): string => {
+  if (value === null || value === undefined) return '<nil/>';
+  
+  if (typeof value === 'boolean') {
+    return `<boolean>${value ? '1' : '0'}</boolean>`;
   }
-  return `<value>${content}</value>`;
+  
+  if (typeof value === 'number') {
+    if (Number.isInteger(value)) return `<int>${value}</int>`;
+    return `<double>${value}</double>`;
+  }
+  
+  if (typeof value === 'string') {
+    return `<string>${xmlEscape(value)}</string>`;
+  }
+  
+  if (Array.isArray(value)) {
+    return `<array><data>${value.map(v => `<value>${serializeToXmlValue(v)}</value>`).join('')}</data></array>`;
+  }
+  
+  if (typeof value === 'object') {
+    if (value instanceof Date) {
+      return `<dateTime.iso8601>${value.toISOString().replace(/\.\d+Z$/, '')}</dateTime.iso8601>`;
+    }
+    const members = Object.entries(value)
+      .map(([k, v]) => `<member><name>${xmlEscape(k)}</name><value>${serializeToXmlValue(v)}</value></member>`)
+      .join('');
+    return `<struct>${members}</struct>`;
+  }
+
+  return `<string>${xmlEscape(String(value))}</string>`;
 };
 
-const parseValue = (node: Element): any => {
+const parseXmlValue = (node: Element): any => {
   const child = node.firstElementChild;
   if (!child) return node.textContent;
-  switch (child.tagName.toLowerCase()) {
-    case 'string': return child.textContent;
+
+  const type = child.tagName.toLowerCase();
+  switch (type) {
+    case 'string': return child.textContent || '';
     case 'int':
     case 'i4': return parseInt(child.textContent || '0', 10);
     case 'double': return parseFloat(child.textContent || '0');
-    case 'boolean': return child.textContent === '1';
+    case 'boolean': return child.textContent === '1' || child.textContent === 'true';
     case 'datetime.iso8601': return new Date(child.textContent || '');
-    case 'array': return Array.from(child.querySelector('data')?.children || []).map(parseValue);
+    case 'array':
+      const data = child.querySelector('data');
+      return data ? Array.from(data.children).map(v => parseXmlValue(v)) : [];
     case 'struct':
       const obj: any = {};
       Array.from(child.children).forEach(m => {
-        const n = m.querySelector('name');
-        const v = m.querySelector('value');
-        if (n && v) obj[n.textContent || ''] = parseValue(v);
+        const nameNode = m.querySelector('name');
+        const valueNode = m.querySelector('value');
+        if (nameNode && valueNode) {
+          obj[nameNode.textContent || ''] = parseXmlValue(valueNode);
+        }
       });
       return obj;
     case 'nil': return null;
@@ -66,74 +85,73 @@ const parseValue = (node: Element): any => {
   }
 };
 
-const PUBLIC_PROXIES = [
-  { name: 'Backup (IO)', fn: (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}` },
-  { name: 'Backup (AO)', fn: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
-  { name: 'Backup (CT)', fn: (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}` }
-];
-
 class OdooClient {
+  private isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+
   constructor(private url: string, private db: string, private onLog?: (msg: string) => void) {
     this.url = this.url.replace(/\/+$/, '').trim();
     if (!this.url.startsWith('http')) this.url = 'https://' + this.url;
   }
 
-  async rpcCall(endpoint: string, method: string, params: any[]) {
-    const xml = `<?xml version="1.0"?><methodCall><methodName>${method}</methodName><params>${params.map(p => `<param>${serialize(p)}</param>`).join('')}</params></methodCall>`;
-    const baseUrl = `${this.url}/xmlrpc/2/${endpoint}`;
+  async rpcCall(service: string, method: string, params: any[]) {
+    const xmlBody = `<?xml version="1.0"?>
+<methodCall>
+  <methodName>${method}</methodName>
+  <params>
+    ${params.map(p => `<param><value>${serializeToXmlValue(p)}</value></param>`).join('\n')}
+  </params>
+</methodCall>`;
+
+    const targetOdooUrl = `${this.url}/xmlrpc/2/${service}`;
     
-    // 1. Intentar Vía Backend Proxy Propio (ELIMINA CORS Y NETWORK ERRORS)
+    // En producción: Usamos nuestro proxy Serverless en /api/odoo-proxy
+    // En desarrollo local: Usamos un proxy CORS público como fallback si el endpoint no existe localmente
+    const proxyEndpoint = this.isDev 
+      ? `https://api.allorigins.win/raw?url=${encodeURIComponent(targetOdooUrl)}`
+      : '/api/odoo-proxy';
+
+    const fetchConfig: RequestInit = this.isDev ? {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/xml' },
+      body: xmlBody
+    } : {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: targetOdooUrl, body: xmlBody })
+    };
+
+    if (this.onLog) this.onLog(`[Conexión] ${method} vía ${this.isDev ? 'Dev Proxy' : 'Serverless Proxy'}...`);
+
     try {
-      if (this.onLog) this.onLog(`[Conector] Intentando vía Backend Proxy Local...`);
-      const response = await fetch('/api/odoo-proxy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: baseUrl, body: xml }),
-        signal: AbortSignal.timeout(15000) 
-      });
-
-      if (response.ok) {
-        const text = await response.text();
-        const doc = new DOMParser().parseFromString(text, 'text/xml');
-        const fault = doc.querySelector('fault value');
-        if (fault) throw new Error(parseValue(fault).faultString || 'Error Odoo');
-        const resultNode = doc.querySelector('params param value');
-        if (this.onLog) this.onLog(`[Conector] ¡Éxito vía Backend Proxy!`);
-        return resultNode ? parseValue(resultNode) : null;
+      const response = await fetch(proxyEndpoint, fetchConfig);
+      
+      if (!response.ok) {
+        throw new Error(`Error HTTP ${response.status}. El proxy no pudo alcanzar Odoo.`);
       }
-      if (this.onLog) this.onLog(`[Info] Backend Proxy no disponible (${response.status}). Activando rotación pública...`);
+
+      const text = await response.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(text, 'text/xml');
+
+      const parseError = doc.querySelector('parsererror');
+      if (parseError) throw new Error("Error al procesar la respuesta XML de Odoo.");
+
+      const fault = doc.querySelector('fault');
+      if (fault) {
+        const faultValue = parseXmlValue(fault.querySelector('value')!);
+        throw new Error(faultValue.faultString || 'Error desconocido de Odoo');
+      }
+
+      const resultNode = doc.querySelector('methodResponse params param value');
+      if (!resultNode) throw new Error("Odoo devolvió una respuesta vacía.");
+
+      const result = parseXmlValue(resultNode);
+      if (this.onLog) this.onLog(`[Éxito] ${method} completado.`);
+      return result;
     } catch (e: any) {
-      if (this.onLog) this.onLog(`[Info] Fallo en Backend Proxy: ${e.message}. Usando sistema de respaldo.`);
+      if (this.onLog) this.onLog(`[Error Crítico] ${e.message}`);
+      throw e;
     }
-
-    // 2. Sistema de Respaldo: Rotación de Proxies Públicos
-    let lastError = "Todos los túneles de conexión están congestionados.";
-    for (const proxy of PUBLIC_PROXIES) {
-      try {
-        if (this.onLog) this.onLog(`[Respaldo] Probando vía ${proxy.name}...`);
-        const targetUrl = proxy.fn(baseUrl);
-        const response = await fetch(targetUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/xml', 'X-Requested-With': 'XMLHttpRequest' },
-          body: xml,
-          mode: 'cors',
-          signal: AbortSignal.timeout(12000) 
-        });
-        if (!response.ok) throw new Error(`Status ${response.status}`);
-        const text = await response.text();
-        if (!text.includes('methodResponse')) throw new Error("Respuesta inválida.");
-        const doc = new DOMParser().parseFromString(text, 'text/xml');
-        const fault = doc.querySelector('fault value');
-        if (fault) throw new Error(parseValue(fault).faultString || 'Error Odoo');
-        const resultNode = doc.querySelector('params param value');
-        if (this.onLog) this.onLog(`[Respaldo] ¡Éxito vía ${proxy.name}!`);
-        return resultNode ? parseValue(resultNode) : null;
-      } catch (e: any) { 
-        lastError = e.message;
-        if (this.onLog) this.onLog(`[Fallo] ${proxy.name}: ${e.message}`);
-      }
-    }
-    throw new Error(lastError);
   }
 }
 
@@ -208,42 +226,71 @@ const CheckoutModal = ({ cart, config, onClose, onOrderSuccess }: any) => {
   const total = cart.reduce((acc: number, item: any) => acc + (item.finalPrice * item.q), 0);
 
   const handleCreateOrder = async () => {
-    if (!userData.name || !userData.phone || (orderType === 'delivery' && !userData.address)) return alert("Datos incompletos");
-    if (!numCopied) return alert("Copia el número de Yape");
+    if (!userData.name || !userData.phone || (orderType === 'delivery' && !userData.address)) return alert("Por favor complete todos los datos.");
+    if (!numCopied) return alert("Por favor copie el número de Yape/Plin para proceder.");
     setIsProcessing(true);
     try {
       const client = new OdooClient(config.url, config.db);
       const uid = await client.rpcCall('common', 'authenticate', [config.db, config.user, config.apiKey, {}]);
-      const partners = await client.rpcCall('object', 'execute_kw', [config.db, uid, config.apiKey, 'res.partner', 'search', [[['phone', '=', userData.phone]]]]);
+      
+      const partners = await client.rpcCall('object', 'execute_kw', [config.db, uid, config.apiKey, 'res.partner', 'search', [[['phone', '=', userData.phone]]]);
       let partnerId = partners?.[0];
-      if (!partnerId) partnerId = await client.rpcCall('object', 'execute_kw', [config.db, uid, config.apiKey, 'res.partner', 'create', [{ name: userData.name, phone: userData.phone, street: userData.address || 'Tienda', customer_rank: 1 }]]);
-      const orderId = await client.rpcCall('object', 'execute_kw', [config.db, uid, config.apiKey, 'sale.order', 'create', [{ partner_id: partnerId, note: `Pedido Web: ${orderType.toUpperCase()} - YAPE` }]]);
-      for (const item of cart) { await client.rpcCall('object', 'execute_kw', [config.db, uid, config.apiKey, 'sale.order.line', 'create', [{ order_id: orderId, product_id: item.id, product_uom_qty: item.q, price_unit: item.finalPrice, name: item.name }]]); }
+      
+      if (!partnerId) {
+        partnerId = await client.rpcCall('object', 'execute_kw', [config.db, uid, config.apiKey, 'res.partner', 'create', [{ 
+          name: userData.name, 
+          phone: userData.phone, 
+          street: userData.address || 'Recojo en Tienda', 
+          customer_rank: 1 
+        }]]);
+      }
+      
+      const orderId = await client.rpcCall('object', 'execute_kw', [config.db, uid, config.apiKey, 'sale.order', 'create', [{ 
+        partner_id: partnerId, 
+        note: `AUTOPEDIDO WEB: ${orderType.toUpperCase()} - Pago vía YAPE` 
+      }]]);
+      
+      for (const item of cart) { 
+        await client.rpcCall('object', 'execute_kw', [config.db, uid, config.apiKey, 'sale.order.line', 'create', [{ 
+          order_id: orderId, 
+          product_id: item.id, 
+          product_uom_qty: item.q, 
+          price_unit: item.finalPrice, 
+          name: item.name 
+        }]]); 
+      }
+      
       const summary = cart.map((i: any) => `• ${i.q}x ${i.name}`).join('%0A');
-      const waMsg = `*🚀 NUEVO PEDIDO #${orderId}*%0A%0A*CLIENTE:* ${userData.name}%0A*DETALLE:*%0A${summary}%0A%0A*TOTAL: S/ ${total.toFixed(2)}*`;
+      const waMsg = `*🚀 NUEVO PEDIDO #${orderId}*%0A%0A*CLIENTE:* ${userData.name}%0A*TIPO:* ${orderType.toUpperCase()}%0A*DETALLE:*%0A${summary}%0A%0A*TOTAL: S/ ${total.toFixed(2)}*`;
       window.open(`https://wa.me/${config.whatsapp}?text=${waMsg}`, '_blank');
       onOrderSuccess();
-    } catch (e: any) { alert(e.message); } finally { setIsProcessing(false); }
+    } catch (e: any) { 
+      alert(`Error al crear pedido: ${e.message}`); 
+    } finally { 
+      setIsProcessing(false); 
+    }
   };
 
   return (
     <div className="fixed inset-0 z-[700] flex items-center justify-center bg-slate-900/95 backdrop-blur-xl p-4">
-      <div className="bg-white w-full max-w-[480px] rounded-[3rem] p-10 space-y-8 animate-scale-in">
+      <div className="bg-white w-full max-w-[480px] rounded-[3rem] p-10 space-y-8 animate-scale-in shadow-2xl">
         <div className="flex gap-4">
-           <button onClick={() => setOrderType('delivery')} className={`flex-1 p-6 rounded-3xl border-2 flex flex-col items-center gap-2 ${orderType === 'delivery' ? 'bg-[#e6007e] border-[#e6007e] text-white shadow-lg' : 'border-slate-50 text-slate-300'}`}><Truck size={32}/><span>Domicilio</span></button>
-           <button onClick={() => setOrderType('pickup')} className={`flex-1 p-6 rounded-3xl border-2 flex flex-col items-center gap-2 ${orderType === 'pickup' ? 'bg-[#8cc63f] border-[#8cc63f] text-white shadow-lg' : 'border-slate-50 text-slate-300'}`}><Store size={32}/><span>Tienda</span></button>
+           <button onClick={() => setOrderType('delivery')} className={`flex-1 p-6 rounded-3xl border-2 flex flex-col items-center gap-2 transition-all ${orderType === 'delivery' ? 'bg-[#e6007e] border-[#e6007e] text-white shadow-lg' : 'border-slate-50 text-slate-300 hover:border-slate-200'}`}><Truck size={32}/><span>Domicilio</span></button>
+           <button onClick={() => setOrderType('pickup')} className={`flex-1 p-6 rounded-3xl border-2 flex flex-col items-center gap-2 transition-all ${orderType === 'pickup' ? 'bg-[#8cc63f] border-[#8cc63f] text-white shadow-lg' : 'border-slate-50 text-slate-300 hover:border-slate-200'}`}><Store size={32}/><span>Tienda</span></button>
         </div>
-        <input type="text" placeholder="Nombre completo" className="w-full px-8 py-5 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-[#e6007e] outline-none" value={userData.name} onChange={e => setUserData({...userData, name: e.target.value})} />
-        <input type="tel" placeholder="Número celular" className="w-full px-8 py-5 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-[#e6007e] outline-none" value={userData.phone} onChange={e => setUserData({...userData, phone: e.target.value})} />
-        {orderType === 'delivery' && <input type="text" placeholder="Dirección" className="w-full px-8 py-5 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-[#e6007e] outline-none" value={userData.address} onChange={e => setUserData({...userData, address: e.target.value})} />}
-        <div className="p-6 bg-slate-50 rounded-2xl border flex items-center justify-between">
-           <div><span className="text-[9px] font-black text-slate-400 uppercase">Yape:</span><div className="text-xl font-black italic">{config.yape}</div></div>
-           <button onClick={() => {navigator.clipboard.writeText(config.yape); setNumCopied(true);}} className={`p-4 rounded-xl ${numCopied ? 'bg-[#8cc63f]' : 'bg-[#e6007e]'} text-white`}>{numCopied ? <Check size={18}/> : <Copy size={18}/>}</button>
+        <div className="space-y-4">
+          <input type="text" placeholder="Nombre completo" className="w-full px-8 py-5 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-[#e6007e] outline-none transition-all" value={userData.name} onChange={e => setUserData({...userData, name: e.target.value})} />
+          <input type="tel" placeholder="Número celular" className="w-full px-8 py-5 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-[#e6007e] outline-none transition-all" value={userData.phone} onChange={e => setUserData({...userData, phone: e.target.value})} />
+          {orderType === 'delivery' && <input type="text" placeholder="Dirección exacta" className="w-full px-8 py-5 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-[#e6007e] outline-none transition-all" value={userData.address} onChange={e => setUserData({...userData, address: e.target.value})} />}
         </div>
-        <button disabled={isProcessing || !numCopied} onClick={handleCreateOrder} className={`w-full py-7 rounded-[2rem] font-black uppercase shadow-2xl flex items-center justify-center gap-4 ${isProcessing || !numCopied ? 'bg-slate-100 text-slate-300' : 'bg-[#e6007e] text-white hover:scale-105 active:scale-95 transition-all'}`}>
-          {isProcessing ? <RefreshCw className="animate-spin"/> : <Send/>} {isProcessing ? 'Enviando...' : 'Confirmar Pedido'}
+        <div className="p-6 bg-slate-50 rounded-2xl border flex items-center justify-between shadow-inner">
+           <div><span className="text-[9px] font-black text-slate-400 uppercase">Yape / Plin:</span><div className="text-xl font-black italic">{config.yape}</div></div>
+           <button onClick={() => {navigator.clipboard.writeText(config.yape); setNumCopied(true);}} className={`p-4 rounded-xl transition-all ${numCopied ? 'bg-[#8cc63f] scale-110' : 'bg-[#e6007e] hover:scale-105'} text-white`}>{numCopied ? <Check size={18}/> : <Copy size={18}/>}</button>
+        </div>
+        <button disabled={isProcessing || !numCopied} onClick={handleCreateOrder} className={`w-full py-7 rounded-[2rem] font-black uppercase shadow-2xl flex items-center justify-center gap-4 transition-all ${isProcessing || !numCopied ? 'bg-slate-100 text-slate-300 cursor-not-allowed' : 'bg-[#e6007e] text-white hover:scale-[1.02] active:scale-95'}`}>
+          {isProcessing ? <RefreshCw className="animate-spin"/> : <Send/>} {isProcessing ? 'Enviando Pedido...' : 'Finalizar Autopedido'}
         </button>
-        <button onClick={onClose} className="w-full text-[10px] font-black text-slate-300 uppercase">Cerrar</button>
+        <button onClick={onClose} className="w-full text-[10px] font-black text-slate-300 uppercase hover:text-slate-500 transition-colors">Cerrar Ventana</button>
       </div>
     </div>
   );
@@ -263,7 +310,7 @@ const App = () => {
   const [showCheckout, setShowCheckout] = useState(false);
 
   const [config, setConfig] = useState(() => {
-    const saved = localStorage.getItem('giofarma_config_v28');
+    const saved = localStorage.getItem('giofarma_config_v31');
     return saved ? { ...DEFAULT_CONFIG, ...JSON.parse(saved) } : DEFAULT_CONFIG;
   });
 
@@ -272,24 +319,39 @@ const App = () => {
   const allCategories = useMemo(() => Array.from(new Set(products.map(p => p.category))).sort(), [products]);
 
   const addLog = (msg: string) => setSyncLogs(p => [new Date().toLocaleTimeString() + ": " + msg, ...p].slice(0, 30));
-  const saveConfig = (newConfig: any) => { setConfig(newConfig); localStorage.setItem('giofarma_config_v28', JSON.stringify(newConfig)); };
+  const saveConfig = (newConfig: any) => { setConfig(newConfig); localStorage.setItem('giofarma_config_v31', JSON.stringify(newConfig)); };
 
   const syncERP = useCallback(async (isSilent = false) => {
-    if (!config.apiKey || !config.url || !config.db) return setError("Configuración incompleta.");
+    if (!config.apiKey || !config.url || !config.db) return setError("Configuración incompleta en el panel de Odoo.");
     if (!isSilent) setLoading(true);
     setError(null);
-    addLog("Iniciando secuencia de sincronización segura...");
+    addLog("Iniciando conexión con Odoo vía Proxy Serverless...");
     try {
       const client = new OdooClient(config.url, config.db, addLog);
       const uid = await client.rpcCall('common', 'authenticate', [config.db, config.user, config.apiKey, {}]);
-      if (!uid) throw new Error("Acceso denegado.");
-      const raw = await client.rpcCall('object', 'execute_kw', [config.db, uid, config.apiKey, 'product.product', 'search_read', [[['sale_ok', '=', true]]], { fields: ['name', 'list_price', 'qty_available', 'categ_id', 'image_128', 'display_name'], limit: 60 }]);
+      if (!uid || uid === false) throw new Error("Credenciales de Odoo inválidas. Revise URL, DB y API Key.");
+      
+      const raw = await client.rpcCall('object', 'execute_kw', [config.db, uid, config.apiKey, 'product.product', 'search_read', [[['sale_ok', '=', true]]], { fields: ['name', 'list_price', 'qty_available', 'categ_id', 'image_128', 'display_name'], limit: 100 }]);
+      
       if (Array.isArray(raw)) {
-        const mapped = raw.map(p => ({ id: p.id, name: p.display_name || p.name, price: p.list_price || 0, stock: p.qty_available || 0, category: Array.isArray(p.categ_id) ? p.categ_id[1] : 'OTROS', finalPrice: p.list_price || 0, image: p.image_128 ? `data:image/png;base64,${p.image_128}` : null }));
+        const mapped = raw.map(p => ({ 
+          id: p.id, 
+          name: p.display_name || p.name, 
+          price: p.list_price || 0, 
+          stock: p.qty_available || 0, 
+          category: Array.isArray(p.categ_id) ? p.categ_id[1] : 'OTROS', 
+          finalPrice: p.list_price || 0, 
+          image: p.image_128 ? `data:image/png;base64,${p.image_128}` : null 
+        }));
         setProducts(mapped);
-        addLog(`Catálogo actualizado: ${mapped.length} productos listos.`);
+        addLog(`Sincronización exitosa: ${mapped.length} productos cargados.`);
       }
-    } catch (e: any) { setError(e.message); addLog(e.message); } finally { if (!isSilent) setLoading(false); }
+    } catch (e: any) { 
+      setError(e.message); 
+      addLog(`FALLO CRÍTICO: ${e.message}`); 
+    } finally { 
+      if (!isSilent) setLoading(false); 
+    }
   }, [config]);
 
   useEffect(() => { syncERP(); }, [syncERP]);
@@ -318,9 +380,9 @@ const App = () => {
         <header className="bg-white sticky top-0 z-[200] px-10 md:px-24 py-8 border-b shadow-sm space-y-6">
            <div className="flex items-center justify-between">
               <PharmaLogo config={config} onAdminRequest={() => setView('admin')} />
-              <button onClick={() => cart.length > 0 && setShowCheckout(true)} className="relative w-14 h-14 bg-slate-950 text-white rounded-2xl flex items-center justify-center shadow-xl">{cart.length > 0 && <span className="absolute -top-3 -right-3 w-8 h-8 bg-[#e6007e] text-white text-[11px] font-black rounded-full flex items-center justify-center border-4 border-white animate-bounce">{cart.length}</span>}<ShoppingCart size={24} /></button>
+              <button onClick={() => cart.length > 0 && setShowCheckout(true)} className="relative w-14 h-14 bg-slate-950 text-white rounded-2xl flex items-center justify-center shadow-xl transition-all hover:scale-105 active:scale-95">{cart.length > 0 && <span className="absolute -top-3 -right-3 w-8 h-8 bg-[#e6007e] text-white text-[11px] font-black rounded-full flex items-center justify-center border-4 border-white animate-bounce">{cart.length}</span>}<ShoppingCart size={24} /></button>
            </div>
-           <div className="relative"><input type="text" placeholder="Buscar en Odoo..." className="w-full pl-14 pr-6 py-5 bg-slate-50 border-2 border-transparent focus:border-[#e6007e] rounded-2xl font-bold outline-none" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} /><Search className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300" size={20}/></div>
+           <div className="relative"><input type="text" placeholder="Buscar en el catálogo de GIOFARMA..." className="w-full pl-14 pr-6 py-5 bg-slate-50 border-2 border-transparent focus:border-[#e6007e] rounded-2xl font-bold outline-none shadow-inner transition-all" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} /><Search className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300" size={20}/></div>
         </header>
         <main className="p-10 md:p-24 space-y-16">
            {/* Diapositivas en el catálogo de la web */}
@@ -329,21 +391,21 @@ const App = () => {
            {loading ? (
              <div className="py-32 text-center">
                <RefreshCw size={48} className="animate-spin text-[#e6007e] mx-auto mb-4" />
-               <p className="text-slate-400 font-black uppercase tracking-widest">Consultando Odoo...</p>
+               <p className="text-slate-400 font-black uppercase tracking-widest animate-pulse">Consultando base de datos...</p>
              </div>
            ) : error ? (
-             <div className="py-32 text-center bg-white rounded-[3rem] border-2 border-red-50 p-12">
+             <div className="py-32 text-center bg-white rounded-[3rem] border-2 border-red-50 p-12 shadow-sm animate-fade-up">
                <AlertCircle size={48} className="text-red-400 mx-auto mb-4" />
-               <p className="text-red-400 font-bold mb-4">{error}</p>
-               <button onClick={() => syncERP()} className="px-8 py-4 bg-slate-950 text-white rounded-2xl font-black uppercase text-[10px]">Reintentar Conexión</button>
+               <p className="text-slate-600 font-bold mb-4">{error}</p>
+               <button onClick={() => syncERP()} className="px-8 py-4 bg-slate-950 text-white rounded-2xl font-black uppercase text-[10px] shadow-lg hover:bg-[#e6007e] transition-colors">Reintentar Conexión</button>
              </div>
            ) : (
              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-8">
                 {filteredProducts.map(p => (
-                  <div key={p.id} className="bg-white p-6 rounded-[2.5rem] border shadow-sm hover:shadow-2xl transition-all group animate-fade-up">
-                    <div className="aspect-square bg-slate-50 rounded-3xl p-4 mb-4 flex items-center justify-center overflow-hidden">{p.image ? <img src={p.image} className="h-full object-contain" /> : <Package className="text-slate-200"/>}</div>
-                    <h3 className="text-xs font-black uppercase italic line-clamp-2 h-8 leading-tight">{p.name}</h3>
-                    <div className="mt-4 flex items-center justify-between"><span className="text-lg font-black italic">S/ {p.price.toFixed(2)}</span><button onClick={() => setCart([...cart, {...p, q: 1}])} className="p-2 bg-slate-950 text-white rounded-lg hover:bg-[#e6007e] transition-colors"><Plus size={16}/></button></div>
+                  <div key={p.id} className="bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-2xl transition-all group animate-fade-up cursor-pointer">
+                    <div className="aspect-square bg-slate-50 rounded-3xl p-4 mb-4 flex items-center justify-center overflow-hidden group-hover:bg-white transition-colors">{p.image ? <img src={p.image} className="h-full object-contain group-hover:scale-110 transition-transform duration-500" /> : <Package size={32} className="text-slate-200"/>}</div>
+                    <h3 className="text-[11px] font-black uppercase italic line-clamp-2 h-8 leading-tight text-slate-700">{p.name}</h3>
+                    <div className="mt-4 flex items-center justify-between"><span className="text-lg font-black italic text-slate-950">S/ {p.price.toFixed(2)}</span><button onClick={() => setCart([...cart, {...p, q: 1}])} className="p-3 bg-slate-950 text-white rounded-xl hover:bg-[#e6007e] transition-all hover:scale-110 active:scale-90"><Plus size={16}/></button></div>
                   </div>
                 ))}
              </div>
@@ -357,50 +419,50 @@ const App = () => {
     if (!adminAuth) {
       return (
         <div className="min-h-screen bg-slate-950 flex items-center justify-center p-10">
-           <div className="w-full max-w-lg bg-white rounded-[4rem] p-16 shadow-2xl space-y-12 text-center">
+           <div className="w-full max-w-lg bg-white rounded-[4rem] p-16 shadow-2xl space-y-12 text-center animate-scale-in">
               <PharmaLogo config={config} onAdminRequest={() => {}} />
-              <input type="password" title="Pass" className="w-full bg-slate-50 border-2 rounded-3xl px-8 py-8 text-center text-6xl font-black outline-none focus:border-[#e6007e]" placeholder="••••" onChange={e => setAdminPassInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && adminPassInput === ADMIN_PASS && setAdminAuth(true)} />
-              <button onClick={() => adminPassInput === ADMIN_PASS ? setAdminAuth(true) : alert("No")} className="w-full py-8 bg-slate-950 text-white rounded-3xl font-black uppercase text-xs shadow-2xl">Acceder</button>
-              <button onClick={() => setView('home')} className="block w-full text-[10px] font-black text-slate-300">Regresar</button>
+              <input type="password" title="Pass" className="w-full bg-slate-50 border-2 rounded-3xl px-8 py-8 text-center text-6xl font-black outline-none focus:border-[#e6007e] transition-all" placeholder="••••" onChange={e => setAdminPassInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && adminPassInput === ADMIN_PASS && setAdminAuth(true)} />
+              <button onClick={() => adminPassInput === ADMIN_PASS ? setAdminAuth(true) : alert("Código incorrecto.")} className="w-full py-8 bg-slate-950 text-white rounded-3xl font-black uppercase text-xs shadow-2xl hover:bg-[#e6007e] transition-all">Acceder al Sistema</button>
+              <button onClick={() => setView('home')} className="block w-full text-[10px] font-black text-slate-300 uppercase hover:text-slate-500">Regresar al Inicio</button>
            </div>
         </div>
       );
     }
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row">
-        <aside className="w-full md:w-80 bg-white border-r p-10 flex flex-col gap-6 sticky top-0 h-screen overflow-y-auto no-scrollbar">
+        <aside className="w-full md:w-80 bg-white border-r p-10 flex flex-col gap-6 sticky top-0 h-screen overflow-y-auto no-scrollbar shadow-sm">
            <PharmaLogo config={config} onAdminRequest={() => {}} />
            <nav className="flex flex-col gap-3">
-              <button onClick={() => setAdminTab('status')} className={`flex items-center gap-3 px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all ${adminTab === 'status' ? 'bg-[#e6007e] text-white shadow-lg' : 'text-slate-400 hover:bg-slate-50'}`}><Activity size={20}/> Monitor</button>
-              <button onClick={() => setAdminTab('catalog')} className={`flex items-center gap-3 px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all ${adminTab === 'catalog' ? 'bg-[#e6007e] text-white shadow-lg' : 'text-slate-400 hover:bg-slate-50'}`}><Package size={20}/> Catálogo</button>
-              <button onClick={() => setAdminTab('banners')} className={`flex items-center gap-3 px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all ${adminTab === 'banners' ? 'bg-[#e6007e] text-white shadow-lg' : 'text-slate-400 hover:bg-slate-50'}`}><ImageIcon size={20}/> Banners</button>
-              <button onClick={() => setAdminTab('config')} className={`flex items-center gap-3 px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all ${adminTab === 'config' ? 'bg-[#e6007e] text-white shadow-lg' : 'text-slate-400 hover:bg-slate-50'}`}><Settings size={20}/> ERP Odoo</button>
+              <button onClick={() => setAdminTab('status')} className={`flex items-center gap-3 px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all ${adminTab === 'status' ? 'bg-[#e6007e] text-white shadow-lg' : 'text-slate-400 hover:bg-slate-50'}`}><Activity size={20}/> Monitor de Red</button>
+              <button onClick={() => setAdminTab('catalog')} className={`flex items-center gap-3 px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all ${adminTab === 'catalog' ? 'bg-[#e6007e] text-white shadow-lg' : 'text-slate-400 hover:bg-slate-50'}`}><Package size={20}/> Gestión Catálogo</button>
+              <button onClick={() => setAdminTab('banners')} className={`flex items-center gap-3 px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all ${adminTab === 'banners' ? 'bg-[#e6007e] text-white shadow-lg' : 'text-slate-400 hover:bg-slate-50'}`}><ImageIcon size={20}/> Banners & Diaps</button>
+              <button onClick={() => setAdminTab('config')} className={`flex items-center gap-3 px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all ${adminTab === 'config' ? 'bg-[#e6007e] text-white shadow-lg' : 'text-slate-400 hover:bg-slate-50'}`}><Settings size={20}/> Odoo ERP Config</button>
            </nav>
-           <button onClick={() => setView('home')} className="mt-auto p-5 bg-red-50 text-red-500 rounded-xl font-black uppercase text-[9px] hover:bg-red-500 hover:text-white transition-all">Salir</button>
+           <button onClick={() => setView('home')} className="mt-auto p-5 bg-red-50 text-red-500 rounded-xl font-black uppercase text-[9px] hover:bg-red-500 hover:text-white transition-all shadow-sm">Cerrar Sesión</button>
         </aside>
         
-        <main className="flex-1 p-12 overflow-y-auto">
+        <main className="flex-1 p-12 overflow-y-auto bg-slate-50">
            {adminTab === 'status' && (
              <div className="space-y-8 animate-fade-up">
-                <h2 className="text-5xl font-black text-slate-900 uppercase italic">Estado del Túnel</h2>
-                <div className="bg-slate-900 rounded-[3rem] p-10 h-[500px] overflow-y-auto font-mono text-[13px] text-[#8cc63f] shadow-2xl no-scrollbar">
-                   {syncLogs.length > 0 ? syncLogs.map((log, i) => <p key={i} className="mb-2 opacity-80"><span className="opacity-30 mr-4">[{i+1}]</span> {log}</p>) : <p className="opacity-40">Sin logs...</p>}
+                <h2 className="text-5xl font-black text-slate-900 uppercase italic">Monitor de Autopedido</h2>
+                <div className="bg-slate-900 rounded-[3rem] p-10 h-[500px] overflow-y-auto font-mono text-[13px] text-[#8cc63f] shadow-2xl no-scrollbar border-4 border-slate-800">
+                   {syncLogs.length > 0 ? syncLogs.map((log, i) => <p key={i} className="mb-2 opacity-80"><span className="opacity-30 mr-4">[{i+1}]</span> {log}</p>) : <p className="opacity-40 italic">Esperando actividad del servidor...</p>}
                 </div>
              </div>
            )}
 
            {adminTab === 'catalog' && (
              <div className="space-y-12 animate-fade-up">
-                <h2 className="text-5xl font-black text-slate-900 uppercase italic">Gestión Odoo</h2>
+                <h2 className="text-5xl font-black text-slate-900 uppercase italic">Control de Catálogo</h2>
                 <div className="bg-white p-10 rounded-[3rem] border shadow-sm space-y-8">
-                   <h3 className="text-xl font-black uppercase text-slate-400 flex items-center gap-3"><Filter size={20}/> Ocultar Categorías</h3>
+                   <h3 className="text-xl font-black uppercase text-slate-400 flex items-center gap-3"><Filter size={20}/> Filtros Globales (Categorías)</h3>
                    <div className="flex flex-wrap gap-3">
                       {allCategories.map(cat => (
                         <button key={cat} onClick={() => {
                           const newHidden = new Set(config.hiddenCategories);
                           if (newHidden.has(cat)) newHidden.delete(cat); else newHidden.add(cat);
                           saveConfig({...config, hiddenCategories: Array.from(newHidden)});
-                        }} className={`px-6 py-4 rounded-2xl border-2 transition-all font-black uppercase text-[10px] ${!hiddenCategories.has(cat) ? 'bg-[#8cc63f] border-[#8cc63f] text-white' : 'text-slate-300'}`}>
+                        }} className={`px-6 py-4 rounded-2xl border-2 transition-all font-black uppercase text-[10px] shadow-sm ${!hiddenCategories.has(cat) ? 'bg-[#8cc63f] border-[#8cc63f] text-white' : 'bg-white border-slate-100 text-slate-300 hover:border-slate-300'}`}>
                            {cat} {!hiddenCategories.has(cat) ? <Eye size={14} className="inline ml-2"/> : <EyeOff size={14} className="inline ml-2"/>}
                         </button>
                       ))}
@@ -408,16 +470,16 @@ const App = () => {
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                    {products.map(p => (
-                     <div key={p.id} className={`p-6 rounded-3xl border-2 flex items-center justify-between transition-all ${!hiddenProducts.has(p.id) ? 'bg-white border-slate-50 shadow-sm' : 'bg-slate-50 opacity-50'}`}>
+                     <div key={p.id} className={`p-6 rounded-3xl border-2 flex items-center justify-between transition-all ${!hiddenProducts.has(p.id) ? 'bg-white border-slate-50 shadow-sm' : 'bg-slate-50 border-transparent opacity-50'}`}>
                         <div className="flex items-center gap-4">
-                           <div className="w-12 h-12 bg-white rounded-xl border flex items-center justify-center overflow-hidden">{p.image ? <img src={p.image} className="max-h-full" /> : <Package size={20} className="text-slate-100"/>}</div>
+                           <div className="w-12 h-12 bg-white rounded-xl border flex items-center justify-center overflow-hidden shadow-inner">{p.image ? <img src={p.image} className="max-h-full" /> : <Package size={20} className="text-slate-100"/>}</div>
                            <div className="flex flex-col"><span className="text-xs font-bold text-slate-800 line-clamp-1">{p.name}</span><span className="text-[9px] font-black text-[#e6007e] uppercase">{p.category}</span></div>
                         </div>
                         <button onClick={() => {
                           const newHidden = new Set(config.hiddenProducts);
                           if (newHidden.has(p.id)) newHidden.delete(p.id); else newHidden.add(p.id);
                           saveConfig({...config, hiddenProducts: Array.from(newHidden)});
-                        }} className="p-3 bg-slate-100 rounded-xl text-slate-400 hover:text-[#e6007e] transition-colors">{!hiddenProducts.has(p.id) ? <Eye size={18}/> : <EyeOff size={18}/>}</button>
+                        }} className={`p-3 rounded-xl transition-all ${!hiddenProducts.has(p.id) ? 'bg-slate-50 text-slate-400 hover:text-[#e6007e]' : 'bg-red-50 text-red-400'}`}>{!hiddenProducts.has(p.id) ? <Eye size={18}/> : <EyeOff size={18}/>}</button>
                      </div>
                    ))}
                 </div>
@@ -426,16 +488,16 @@ const App = () => {
 
            {adminTab === 'banners' && (
              <div className="space-y-12 animate-fade-up">
-                <div className="flex justify-between items-center"><h2 className="text-5xl font-black text-slate-900 uppercase italic">Banners</h2><button onClick={() => saveConfig({...config, banners: [...(config.banners || []), {img: '', title: 'Nuevo', desc: 'Desc'}]})} className="px-8 py-5 bg-[#e6007e] text-white rounded-2xl font-black uppercase text-[10px] shadow-xl">+ Nuevo Banner</button></div>
+                <div className="flex justify-between items-center"><h2 className="text-5xl font-black text-slate-900 uppercase italic">Banners & Diaps</h2><button onClick={() => saveConfig({...config, banners: [...(config.banners || []), {img: '', title: 'Nuevo Slide', desc: 'Descripción del slide'}]})} className="px-8 py-5 bg-[#e6007e] text-white rounded-2xl font-black uppercase text-[10px] shadow-xl hover:scale-105 transition-all">+ Añadir Nuevo</button></div>
                 <div className="grid grid-cols-1 gap-8">
                    {config.banners?.map((b: any, idx: number) => (
-                     <div key={idx} className="bg-white p-10 rounded-[3rem] border shadow-sm flex flex-col md:flex-row gap-8">
-                        <div className="w-full md:w-64 h-40 bg-slate-50 rounded-3xl border overflow-hidden flex items-center justify-center">{b.img ? <img src={b.img} className="w-full h-full object-cover" /> : <ImageIcon className="text-slate-200" size={40}/>}</div>
+                     <div key={idx} className="bg-white p-10 rounded-[3rem] border shadow-sm flex flex-col md:flex-row gap-8 animate-fade-up" style={{animationDelay: `${idx*0.1}s`}}>
+                        <div className="w-full md:w-64 h-40 bg-slate-50 rounded-3xl border-2 border-dashed overflow-hidden flex items-center justify-center shadow-inner">{b.img ? <img src={b.img} className="w-full h-full object-cover" /> : <ImageIcon className="text-slate-200" size={40}/>}</div>
                         <div className="flex-1 space-y-4">
-                           <input type="text" placeholder="URL Imagen" className="w-full bg-slate-50 px-6 py-4 rounded-xl font-bold border-2 border-transparent focus:border-[#e6007e] outline-none transition-all text-xs" value={b.img} onChange={e => { const nb = [...config.banners]; nb[idx].img = e.target.value; saveConfig({...config, banners: nb}); }} />
-                           <input type="text" placeholder="Título" className="w-full bg-slate-50 px-6 py-4 rounded-xl font-bold border-2 border-transparent focus:border-[#e6007e] outline-none transition-all text-xs" value={b.title} onChange={e => { const nb = [...config.banners]; nb[idx].title = e.target.value; saveConfig({...config, banners: nb}); }} />
+                           <div className="space-y-1"><label className="text-[8px] font-black uppercase text-slate-400 ml-2">URL de Imagen</label><input type="text" placeholder="https://..." className="w-full bg-slate-50 px-6 py-4 rounded-xl font-bold border-2 border-transparent focus:border-[#e6007e] outline-none transition-all text-xs" value={b.img} onChange={e => { const nb = [...config.banners]; nb[idx].img = e.target.value; saveConfig({...config, banners: nb}); }} /></div>
+                           <div className="space-y-1"><label className="text-[8px] font-black uppercase text-slate-400 ml-2">Título del Slide</label><input type="text" placeholder="Título impactante" className="w-full bg-slate-50 px-6 py-4 rounded-xl font-bold border-2 border-transparent focus:border-[#e6007e] outline-none transition-all text-xs" value={b.title} onChange={e => { const nb = [...config.banners]; nb[idx].title = e.target.value; saveConfig({...config, banners: nb}); }} /></div>
                         </div>
-                        <button onClick={() => saveConfig({...config, banners: config.banners.filter((_:any, i:number) => i !== idx)})} className="p-6 bg-red-50 text-red-500 rounded-2xl hover:bg-red-500 hover:text-white transition-all"><Trash2 size={24}/></button>
+                        <button onClick={() => saveConfig({...config, banners: config.banners.filter((_:any, i:number) => i !== idx)})} className="p-6 bg-red-50 text-red-500 rounded-2xl hover:bg-red-500 hover:text-white transition-all shadow-sm self-center md:self-auto"><Trash2 size={24}/></button>
                      </div>
                    ))}
                 </div>
@@ -444,17 +506,20 @@ const App = () => {
 
            {adminTab === 'config' && (
              <div className="max-w-4xl space-y-12 animate-fade-up">
-                <div className="bg-white p-12 rounded-[4rem] border shadow-sm space-y-12">
-                   <h3 className="text-3xl font-black text-slate-900 uppercase italic border-b pb-6">Ajustes ERP</h3>
+                <div className="bg-white p-12 rounded-[4rem] border shadow-xl space-y-12">
+                   <div className="flex items-center justify-between border-b pb-8"><h3 className="text-3xl font-black text-slate-900 uppercase italic">Configuración Odoo</h3><ShieldCheck className="text-[#8cc63f]" size={32}/></div>
                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                       {['url', 'db', 'user', 'apiKey', 'whatsapp', 'yape', 'companyName'].map(key => (
                         <div key={key} className="space-y-3">
-                           <label className="text-[10px] font-black uppercase text-slate-400 ml-2">{key}</label>
-                           <input type={key === 'apiKey' ? 'password' : 'text'} title={key} className="w-full bg-slate-50 px-6 py-5 rounded-2xl font-mono text-sm border-2 border-transparent focus:border-[#e6007e] outline-none" value={(config as any)[key]} onChange={e => saveConfig({...config, [key]: e.target.value})} />
+                           <label className="text-[10px] font-black uppercase text-slate-400 ml-2">{key.replace(/([A-Z])/g, ' $1')}</label>
+                           <input type={key === 'apiKey' ? 'password' : 'text'} title={key} className="w-full bg-slate-50 px-6 py-5 rounded-2xl font-mono text-sm border-2 border-transparent focus:border-[#e6007e] outline-none shadow-inner transition-all" value={(config as any)[key]} onChange={e => saveConfig({...config, [key]: e.target.value})} />
                         </div>
                       ))}
                    </div>
-                   <button onClick={() => syncERP()} className="w-full py-8 bg-[#8cc63f] text-white rounded-[2rem] font-black uppercase shadow-2xl text-xs tracking-[0.4em] hover:brightness-110 transition-all">Sincronizar Maestro</button>
+                   <div className="pt-8">
+                    <button onClick={() => syncERP()} className="w-full py-8 bg-[#8cc63f] text-white rounded-[2rem] font-black uppercase shadow-2xl text-xs tracking-[0.4em] hover:scale-[1.02] active:scale-95 transition-all">Sincronizar Maestro con Proxy Propio</button>
+                    <p className="mt-4 text-center text-[10px] text-slate-300 font-bold uppercase tracking-widest">Sincronización segura punto a punto</p>
+                   </div>
                 </div>
              </div>
            )}
